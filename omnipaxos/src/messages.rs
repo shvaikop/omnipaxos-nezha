@@ -1,5 +1,5 @@
 use crate::{
-    messages::{ballot_leader_election::BLEMessage, sequence_paxos::PaxosMessage},
+    messages::{ballot_leader_election::BLEMessage, sequence_paxos::PaxosMessage, nezha::NezhaMessage},
     storage::Entry,
     util::NodeId,
 };
@@ -191,6 +191,131 @@ pub mod sequence_paxos {
         pub to: NodeId,
         /// The message content.
         pub msg: PaxosMsg<T>,
+    }
+}
+
+/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from 
+/// SequencePaxos and BLE and are only used for the fast/slow coordniation 
+pub mod nezha {
+    use crate::{storage::{Entry}, util::{NodeId}};
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+
+    /// TODO: probably nice to replace with Timestamp from clock_simulator oncen integrated?
+    pub type Timestamp = u64;
+    /// TODO: replace with the requestId type from NezhaProxy once the prozy defines a requestId type?
+    /// then we could avoid having both client_id and request_id
+    pub type RequestId = u64; 
+
+    /// Request sent by a client to the proxy to propose an entry for replication
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct ClientRequest<T>
+    where
+        T: Entry,
+    {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// The entry to be proposed for replication
+        pub entry: T,
+    }
+
+    /// Reply sent by the proxy back to the client after the request completes
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct ClientReply {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// Whether the request was applied successfully
+        pub ok: bool,
+    }
+
+    /// Prepare message sent by the proxy to replicas with a deadline when the message should be processed
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct PrepareMsgWithDeadline<T>
+    where
+        T: Entry, 
+    {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// The entry to be proposed for replication
+        pub entry: T,
+        /// The timestamp when the message is sent
+        pub sent: Timestamp,  
+        /// The deadline timestap when the message should be processed
+        pub deadline: Timestamp,   
+    }
+
+    /// Fast path is sent by every replica to prozy after it has appended or exexuted the request
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct FastReply {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// Hash of all replicas logs 
+        pub log_hash: u64,
+    }
+
+    /// Slow path reply from both leaders and followers to proxy
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct SlowReply {
+        /// The id of the client request
+        pub request_id: RequestId,
+    }
+
+    /// Periodically send from followers to the leader, reporting the follwer's sync-point
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct LogStatus {
+        /// Highest log index for which this replica's log matches the leader's log
+        pub sync_point: usize,
+    }
+
+    /// Broadcast by the leader so followers can adjust their log entry at log_id.
+    /// E.g. insert the missing request or update its deadline to match the leader
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct LogModification {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// The deadline timestap when the message should be processed
+        pub deadline: Timestamp,  
+        /// Position of this entry in the leader's log
+        pub log_id: usize,
+    }
+
+    /// A struct for a Nezha message that also includes sender and receiver.
+    #[allow(missing_docs)]
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub enum NezhaMsg<T>
+    where
+        T: Entry,
+    {
+        ClientRequest(ClientRequest<T>),
+        ClientReply(ClientReply),
+        PrepareMsgWithDeadline(PrepareMsgWithDeadline<T>),
+        FastReply(FastReply),
+        SlowReply(SlowReply),
+        LogStatus(LogStatus),
+        LogModification(LogModification),
+    }
+
+    /// A struct for a Nezha message that also includes sender and receiver
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct NezhaMessage<T>
+    where
+        T: Entry,
+    {
+        /// Sender of `msg`.
+        pub from: NodeId,
+        /// Receiver of `msg`.
+        pub to: NodeId,
+        /// The message content.
+        pub msg: NezhaMsg<T>,
     }
 }
 
