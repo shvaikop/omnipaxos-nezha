@@ -24,6 +24,10 @@ lru = { version = "0.11.0", optional = true }
 num-traits = { version = "0.2.16", optional = true }
 linked_hash_set = { version = "0.1.4", optional = true }
 
+[dependencies.uuid]
+version = "1.21.0"
+features = ["v4", "serde"]
+
 [dev-dependencies]
 kompact = { git = "https://github.com/kompics/kompact", rev = "4fd1fdc", features = ["silent_logging"] }
 omnipaxos_storage = { path = "../omnipaxos_storage", features = ["persistent_storage"] }
