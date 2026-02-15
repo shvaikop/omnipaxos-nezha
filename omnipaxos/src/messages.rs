@@ -1,5 +1,5 @@
 use crate::{
-    messages::{ballot_leader_election::BLEMessage, sequence_paxos::PaxosMessage, nezha::NezhaMessage},
+    messages::{ballot_leader_election::BLEMessage, sequence_paxos::PaxosMessage},
     storage::Entry,
     util::NodeId,
 };
@@ -201,11 +201,10 @@ pub mod nezha {
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
 
-    /// TODO: probably nice to replace with Timestamp from clock_simulator oncen integrated?
+    /// Timestamp type used for Nezha messages, representing the time when a message is sent or a deadline for processing the message
     pub type Timestamp = u64;
-    /// TODO: replace with the requestId type from NezhaProxy once the prozy defines a requestId type?
-    /// then we could avoid having both client_id and request_id
-    pub type RequestId = u64; 
+    /// Unique identifier for client requests, used to track requests across the system and match replies to requests
+    pub type RequestId = uuid::Uuid;
 
     /// Request sent by a client to the proxy to propose an entry for replication
     #[derive(Clone, Debug)]
