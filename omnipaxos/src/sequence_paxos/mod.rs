@@ -14,7 +14,11 @@ use crate::{
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
-use std::{fmt::Debug, vec};
+use std::{
+    collections::{BinaryHeap, HashMap},
+    fmt::Debug,
+    vec,
+};
 
 pub mod follower;
 pub mod leader;
@@ -39,6 +43,12 @@ where
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
     cached_promise_message: Option<Promise<T>>,
+    // Nezha attributes
+    early_buffer: BinaryHeap<PrepareWithDeadline<T>>,
+    last_released_deadline: u64, // TODO: use correct type for clock simulator
+    late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
+    sync_point: usize,
+    commit_point: usize,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -97,6 +107,11 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
+            early_buffer: BinaryHeap::new(),
+            last_released_deadline: 0,
+            late_buffer: HashMap::new(),
+            sync_point: 0,
+            commit_point: 0,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -264,6 +279,7 @@ where
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
+            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
             PaxosMsg::Promise(prom) => match &self.state {
                 (Role::Leader, Phase::Prepare) => self.handle_promise_prepare(prom, m.from),
                 (Role::Leader, Phase::Accept) => self.handle_promise_accept(prom, m.from),
@@ -301,6 +317,18 @@ where
         } else {
             self.propose_entry(entry);
             Ok(())
+        }
+    }
+
+    pub(crate) fn handle_prepare_with_deadline(
+        &mut self,
+        prep: PrepareWithDeadline<T>,
+        from: NodeId,
+    ) {
+        if prep.deadline < self.last_released_deadline {
+            self.early_buffer.push(prep);
+        } else {
+            self.late_buffer.insert(prep.request_id, prep);
         }
     }
 

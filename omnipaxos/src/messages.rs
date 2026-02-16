@@ -17,6 +17,12 @@ pub mod sequence_paxos {
     use serde::{Deserialize, Serialize};
     use std::fmt::Debug;
 
+    /// TODO: Get rid of duplication- decide what messages we want where
+    /// Timestamp type used for Nezha messages, representing the time when a message is sent or a deadline for processing the message
+    pub type Timestamp = u64;
+    /// Unique identifier for client requests, used to track requests across the system and match replies to requests
+    pub type RequestId = uuid::Uuid;
+
     /// Message sent by a follower on crash-recovery or dropped messages to request its leader to re-prepare them.
     #[derive(Copy, Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -37,6 +43,45 @@ pub mod sequence_paxos {
         pub n_accepted: Ballot,
         /// The log length of this leader.
         pub accepted_idx: usize,
+    }
+
+    /// Prepare message sent by the proxy to replicas with a deadline when the message should be processed
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct PrepareWithDeadline<T>
+    where
+        T: Entry,
+    {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// The entry to be proposed for replication
+        pub entry: T,
+        /// The timestamp when the message is sent
+        pub sent: Timestamp,
+        /// The deadline timestap when the message should be processed
+        pub deadline: Timestamp,
+    }
+
+    /// Implement ordering traits for PrepareWithDeadline so it can be stored in a BinaryHeap for the early_buffer, ordered by deadline
+    impl<T: Entry> Eq for PrepareWithDeadline<T> {}
+
+    impl<T: Entry> PartialEq for PrepareWithDeadline<T> {
+        fn eq(&self, other: &Self) -> bool {
+            self.deadline == other.deadline
+        }
+    }
+
+    // Reverse ordering so BinaryHeap (which is a max-heap) pops the smallest/earliest deadline first
+    impl<T: Entry> Ord for PrepareWithDeadline<T> {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other.deadline.cmp(&self.deadline)
+        }
+    }
+
+    impl<T: Entry> PartialOrd for PrepareWithDeadline<T> {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
     }
 
     /// Promise message sent by a follower in response to a [`Prepare`] sent by the leader.
@@ -165,6 +210,7 @@ pub mod sequence_paxos {
         PrepareReq(PrepareReq),
         #[allow(missing_docs)]
         Prepare(Prepare),
+        PrepareWithDeadline(PrepareWithDeadline<T>),
         Promise(Promise<T>),
         AcceptSync(AcceptSync<T>),
         AcceptDecide(AcceptDecide<T>),
@@ -194,10 +240,10 @@ pub mod sequence_paxos {
     }
 }
 
-/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from 
-/// SequencePaxos and BLE and are only used for the fast/slow coordniation 
+/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from
+/// SequencePaxos and BLE and are only used for the fast/slow coordniation
 pub mod nezha {
-    use crate::{storage::{Entry}, util::{NodeId}};
+    use crate::{storage::Entry, util::NodeId};
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
 
@@ -229,30 +275,13 @@ pub mod nezha {
         pub ok: bool,
     }
 
-    /// Prepare message sent by the proxy to replicas with a deadline when the message should be processed
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct PrepareMsgWithDeadline<T>
-    where
-        T: Entry, 
-    {
-        /// The id of the client request
-        pub request_id: RequestId,
-        /// The entry to be proposed for replication
-        pub entry: T,
-        /// The timestamp when the message is sent
-        pub sent: Timestamp,  
-        /// The deadline timestap when the message should be processed
-        pub deadline: Timestamp,   
-    }
-
-    /// Fast path is sent by every replica to prozy after it has appended or exexuted the request
+    /// Fast path is sent by every replica to proxy after it has appended or executed the request
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct FastReply {
         /// The id of the client request
         pub request_id: RequestId,
-        /// Hash of all replicas logs 
+        /// Hash of all replicas logs
         pub log_hash: u64,
     }
 
@@ -280,7 +309,7 @@ pub mod nezha {
         /// The id of the client request
         pub request_id: RequestId,
         /// The deadline timestap when the message should be processed
-        pub deadline: Timestamp,  
+        pub deadline: Timestamp,
         /// Position of this entry in the leader's log
         pub log_id: usize,
     }
@@ -295,7 +324,6 @@ pub mod nezha {
     {
         ClientRequest(ClientRequest<T>),
         ClientReply(ClientReply),
-        PrepareMsgWithDeadline(PrepareMsgWithDeadline<T>),
         FastReply(FastReply),
         SlowReply(SlowReply),
         LogStatus(LogStatus),
