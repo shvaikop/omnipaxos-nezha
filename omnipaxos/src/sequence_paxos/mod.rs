@@ -279,7 +279,6 @@ where
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
-            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
             PaxosMsg::Promise(prom) => match &self.state {
                 (Role::Leader, Phase::Prepare) => self.handle_promise_prepare(prom, m.from),
                 (Role::Leader, Phase::Accept) => self.handle_promise_accept(prom, m.from),
@@ -294,6 +293,11 @@ where
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
+            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
+            PaxosMsg::FastReply(freply) => todo!(),
+            PaxosMsg::SlowReply(sreply) => todo!(),
+            PaxosMsg::LogStatus(ls) => todo!(),
+            PaxosMsg::LogModification(lm) => todo!(),
         }
     }
 

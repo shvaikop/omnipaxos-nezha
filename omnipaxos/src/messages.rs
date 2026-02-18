@@ -6,6 +6,11 @@ use crate::{
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// Timestamp type used for Nezha messages, representing the time when a message is sent or a deadline for processing the message
+pub type Timestamp = u64;
+/// Unique identifier for client requests, used to track requests across the system and match replies to requests
+pub type RequestId = uuid::Uuid;
+
 /// Internal component for log replication
 pub mod sequence_paxos {
     use crate::{
@@ -17,11 +22,8 @@ pub mod sequence_paxos {
     use serde::{Deserialize, Serialize};
     use std::fmt::Debug;
 
-    /// TODO: Get rid of duplication- decide what messages we want where
-    /// Timestamp type used for Nezha messages, representing the time when a message is sent or a deadline for processing the message
-    pub type Timestamp = u64;
-    /// Unique identifier for client requests, used to track requests across the system and match replies to requests
-    pub type RequestId = uuid::Uuid;
+    /// Re-export types from parent module
+    pub use crate::messages::{RequestId, Timestamp};
 
     /// Message sent by a follower on crash-recovery or dropped messages to request its leader to re-prepare them.
     #[derive(Copy, Clone, Debug)]
@@ -43,45 +45,6 @@ pub mod sequence_paxos {
         pub n_accepted: Ballot,
         /// The log length of this leader.
         pub accepted_idx: usize,
-    }
-
-    /// Prepare message sent by the proxy to replicas with a deadline when the message should be processed
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct PrepareWithDeadline<T>
-    where
-        T: Entry,
-    {
-        /// The id of the client request
-        pub request_id: RequestId,
-        /// The entry to be proposed for replication
-        pub entry: T,
-        /// The timestamp when the message is sent
-        pub sent: Timestamp,
-        /// The deadline timestap when the message should be processed
-        pub deadline: Timestamp,
-    }
-
-    /// Implement ordering traits for PrepareWithDeadline so it can be stored in a BinaryHeap for the early_buffer, ordered by deadline
-    impl<T: Entry> Eq for PrepareWithDeadline<T> {}
-
-    impl<T: Entry> PartialEq for PrepareWithDeadline<T> {
-        fn eq(&self, other: &Self) -> bool {
-            self.deadline == other.deadline
-        }
-    }
-
-    // Reverse ordering so BinaryHeap (which is a max-heap) pops the smallest/earliest deadline first
-    impl<T: Entry> Ord for PrepareWithDeadline<T> {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            other.deadline.cmp(&self.deadline)
-        }
-    }
-
-    impl<T: Entry> PartialOrd for PrepareWithDeadline<T> {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
     }
 
     /// Promise message sent by a follower in response to a [`Prepare`] sent by the leader.
@@ -198,64 +161,10 @@ pub mod sequence_paxos {
         Snapshot(Option<usize>),
     }
 
-    /// An enum for all the different message types.
-    #[allow(missing_docs)]
+    /// Prepare message sent by the proxy to replicas with a deadline when the message should be processed
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub enum PaxosMsg<T>
-    where
-        T: Entry,
-    {
-        /// Request a [`Prepare`] to be sent from the leader. Used for fail-recovery.
-        PrepareReq(PrepareReq),
-        #[allow(missing_docs)]
-        Prepare(Prepare),
-        PrepareWithDeadline(PrepareWithDeadline<T>),
-        Promise(Promise<T>),
-        AcceptSync(AcceptSync<T>),
-        AcceptDecide(AcceptDecide<T>),
-        Accepted(Accepted),
-        NotAccepted(NotAccepted),
-        Decide(Decide),
-        /// Forward client proposals to the leader.
-        ProposalForward(Vec<T>),
-        Compaction(Compaction),
-        AcceptStopSign(AcceptStopSign),
-        ForwardStopSign(StopSign),
-    }
-
-    /// A struct for a Paxos message that also includes sender and receiver.
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct PaxosMessage<T>
-    where
-        T: Entry,
-    {
-        /// Sender of `msg`.
-        pub from: NodeId,
-        /// Receiver of `msg`.
-        pub to: NodeId,
-        /// The message content.
-        pub msg: PaxosMsg<T>,
-    }
-}
-
-/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from
-/// SequencePaxos and BLE and are only used for the fast/slow coordniation
-pub mod nezha {
-    use crate::{storage::Entry, util::NodeId};
-    #[cfg(feature = "serde")]
-    use serde::{Deserialize, Serialize};
-
-    /// Timestamp type used for Nezha messages, representing the time when a message is sent or a deadline for processing the message
-    pub type Timestamp = u64;
-    /// Unique identifier for client requests, used to track requests across the system and match replies to requests
-    pub type RequestId = uuid::Uuid;
-
-    /// Request sent by a client to the proxy to propose an entry for replication
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct ClientRequest<T>
+    pub struct PrepareWithDeadline<T>
     where
         T: Entry,
     {
@@ -263,16 +172,32 @@ pub mod nezha {
         pub request_id: RequestId,
         /// The entry to be proposed for replication
         pub entry: T,
+        /// The timestamp when the message is sent
+        pub sent: Timestamp,
+        /// The deadline timestap when the message should be processed
+        pub deadline: Timestamp,
     }
 
-    /// Reply sent by the proxy back to the client after the request completes
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct ClientReply {
-        /// The id of the client request
-        pub request_id: RequestId,
-        /// Whether the request was applied successfully
-        pub ok: bool,
+    /// Implement ordering traits for PrepareWithDeadline so it can be stored in a BinaryHeap for the early_buffer, ordered by deadline
+    impl<T: Entry> Eq for PrepareWithDeadline<T> {}
+
+    impl<T: Entry> PartialEq for PrepareWithDeadline<T> {
+        fn eq(&self, other: &Self) -> bool {
+            self.deadline == other.deadline
+        }
+    }
+
+    // Reverse ordering so BinaryHeap (which is a max-heap) pops the smallest/earliest deadline first
+    impl<T: Entry> Ord for PrepareWithDeadline<T> {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other.deadline.cmp(&self.deadline)
+        }
+    }
+
+    impl<T: Entry> PartialOrd for PrepareWithDeadline<T> {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
     }
 
     /// Fast path is sent by every replica to proxy after it has appended or executed the request
@@ -314,6 +239,87 @@ pub mod nezha {
         pub log_id: usize,
     }
 
+    /// An enum for all the different message types.
+    #[allow(missing_docs)]
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub enum PaxosMsg<T>
+    where
+        T: Entry,
+    {
+        /// Request a [`Prepare`] to be sent from the leader. Used for fail-recovery.
+        PrepareReq(PrepareReq),
+        #[allow(missing_docs)]
+        Prepare(Prepare),
+
+        Promise(Promise<T>),
+        AcceptSync(AcceptSync<T>),
+        AcceptDecide(AcceptDecide<T>),
+        Accepted(Accepted),
+        NotAccepted(NotAccepted),
+        Decide(Decide),
+        /// Forward client proposals to the leader.
+        ProposalForward(Vec<T>),
+        Compaction(Compaction),
+        AcceptStopSign(AcceptStopSign),
+        ForwardStopSign(StopSign),
+        /// Nezha messages
+        PrepareWithDeadline(PrepareWithDeadline<T>),
+        FastReply(FastReply),
+        SlowReply(SlowReply),
+        LogStatus(LogStatus),
+        LogModification(LogModification),
+    }
+
+    /// A struct for a Paxos message that also includes sender and receiver.
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct PaxosMessage<T>
+    where
+        T: Entry,
+    {
+        /// Sender of `msg`.
+        pub from: NodeId,
+        /// Receiver of `msg`.
+        pub to: NodeId,
+        /// The message content.
+        pub msg: PaxosMsg<T>,
+    }
+}
+
+/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from
+/// SequencePaxos and BLE and are only used for the fast/slow coordniation
+pub mod nezha {
+    use crate::{storage::Entry, util::NodeId};
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+
+    // Re-export types from parent module
+    pub use crate::messages::{RequestId, Timestamp};
+
+    /// Request sent by a client to the proxy to propose an entry for replication
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct ClientRequest<T>
+    where
+        T: Entry,
+    {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// The entry to be proposed for replication
+        pub entry: T,
+    }
+
+    /// Reply sent by the proxy back to the client after the request completes
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct ClientReply {
+        /// The id of the client request
+        pub request_id: RequestId,
+        /// Whether the request was applied successfully
+        pub ok: bool,
+    }
+
     /// A struct for a Nezha message that also includes sender and receiver.
     #[allow(missing_docs)]
     #[derive(Clone, Debug)]
@@ -324,10 +330,6 @@ pub mod nezha {
     {
         ClientRequest(ClientRequest<T>),
         ClientReply(ClientReply),
-        FastReply(FastReply),
-        SlowReply(SlowReply),
-        LogStatus(LogStatus),
-        LogModification(LogModification),
     }
 
     /// A struct for a Nezha message that also includes sender and receiver
