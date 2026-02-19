@@ -15,6 +15,7 @@ use crate::{
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
 use std::{
+    cmp::Reverse,
     collections::{BinaryHeap, HashMap},
     fmt::Debug,
     vec,
@@ -44,7 +45,7 @@ where
     current_seq_num: SequenceNumber,
     cached_promise_message: Option<Promise<T>>,
     // Nezha attributes
-    early_buffer: BinaryHeap<PrepareWithDeadline<T>>,
+    early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     sync_point: usize,
@@ -329,8 +330,8 @@ where
         prep: PrepareWithDeadline<T>,
         from: NodeId,
     ) {
-        if prep.deadline < self.last_released_deadline {
-            self.early_buffer.push(prep);
+        if prep.deadline > self.last_released_deadline {
+            self.early_buffer.push(Reverse(prep));
         } else {
             self.late_buffer.insert(prep.request_id, prep);
         }

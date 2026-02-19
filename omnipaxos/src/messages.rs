@@ -183,14 +183,16 @@ pub mod sequence_paxos {
 
     impl<T: Entry> PartialEq for PrepareWithDeadline<T> {
         fn eq(&self, other: &Self) -> bool {
-            self.deadline == other.deadline
+            self.request_id == other.request_id && self.deadline == other.deadline
         }
     }
 
-    // Reverse ordering so BinaryHeap (which is a max-heap) pops the smallest/earliest deadline first
     impl<T: Entry> Ord for PrepareWithDeadline<T> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            other.deadline.cmp(&self.deadline)
+            // compare first by deadline, breaking ties by request_id when required
+            self.deadline
+                .cmp(&other.deadline)
+                .then_with(|| self.request_id.cmp(&other.request_id))
         }
     }
 
