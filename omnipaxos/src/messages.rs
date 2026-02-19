@@ -206,6 +206,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct FastReply {
+        /// Ballot number
+        pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
         /// Hash of all replicas logs
@@ -216,6 +218,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct SlowReply {
+        /// Ballot number
+        pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
     }
@@ -224,6 +228,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct LogStatus {
+        /// Ballot number
+        pub n: Ballot,
         /// Highest log index for which this replica's log matches the leader's log
         pub sync_point: usize,
     }
@@ -233,6 +239,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct LogModification {
+        /// Ballot number
+        pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
         /// The deadline timestap when the message should be processed
