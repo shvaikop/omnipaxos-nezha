@@ -206,6 +206,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct FastReply {
+        /// Ballot number
+        pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
         /// Hash of all replicas logs
@@ -216,6 +218,8 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct SlowReply {
+        /// Ballot number
+        pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
     }
@@ -224,15 +228,27 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct LogStatus {
+        /// Ballot number
+        pub n: Ballot,
         /// Highest log index for which this replica's log matches the leader's log
         pub sync_point: usize,
     }
 
     /// Broadcast by the leader so followers can adjust their log entry at log_id.
-    /// E.g. insert the missing request or update its deadline to match the leader
+    /// Includes multiple LogModifications from followers sync_point
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct LogModification {
+    pub struct LogModifications {
+        /// Ballot number
+        pub n: Ballot,
+        /// Multiple modifications under the same ballot
+        pub modifications: Vec<SingleLogModification>,
+    }
+
+    /// Single log modification included in LogModifications
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct SingleLogModification {
         /// The id of the client request
         pub request_id: RequestId,
         /// The deadline timestap when the message should be processed
@@ -240,6 +256,7 @@ pub mod sequence_paxos {
         /// Position of this entry in the leader's log
         pub log_id: usize,
     }
+
 
     /// An enum for all the different message types.
     #[allow(missing_docs)]
@@ -270,7 +287,7 @@ pub mod sequence_paxos {
         FastReply(FastReply),
         SlowReply(SlowReply),
         LogStatus(LogStatus),
-        LogModification(LogModification),
+        LogModifications(LogModifications),
     }
 
     /// A struct for a Paxos message that also includes sender and receiver.
