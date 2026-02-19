@@ -1,3 +1,4 @@
+use omnipaxos::storage::LogHash;
 use omnipaxos::{
     ballot_leader_election::Ballot,
     storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
@@ -6,7 +7,6 @@ use rocksdb::{ColumnFamilyDescriptor, ColumnFamilyRef, Options, WriteBatchWithTr
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use zerocopy::{AsBytes, FromBytes};
-use omnipaxos::storage::LogHash;
 
 const DEFAULT: &str = "/default_storage/";
 const LOG: &str = "log";

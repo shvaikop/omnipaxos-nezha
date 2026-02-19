@@ -24,3 +24,6 @@ lto = true
 
 [features]
 persistent_storage = ["dep:rocksdb", "dep:serde", "dep:bincode", "dep:zerocopy"]
+
+[dev-dependencies]
+tempfile = "3.3.0"

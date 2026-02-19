@@ -1,6 +1,6 @@
 pub(crate) mod internal_storage;
-mod storage_hash;
 mod state_cache;
+mod storage_hash;
 pub use storage_hash::{EntryHash, LogHash};
 
 use super::ballot_leader_election::Ballot;
