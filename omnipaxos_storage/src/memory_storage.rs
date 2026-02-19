@@ -1,6 +1,6 @@
 use omnipaxos::{
     ballot_leader_election::Ballot,
-    storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
+    storage::{Entry, LogHash, StopSign, Storage, StorageOp, StorageResult},
 };
 /// An in-memory storage implementation for SequencePaxos.
 #[derive(Clone)]
@@ -142,6 +142,12 @@ where
 
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
         Ok(self.snapshot.clone())
+    }
+
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        // TODO: log warning if to is outside the bounds
+        let entries = self.log.get(0..to).unwrap_or(&[]);
+        Ok(LogHash::compute(entries))
     }
 }
 

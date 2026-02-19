@@ -6,6 +6,7 @@ use rocksdb::{ColumnFamilyDescriptor, ColumnFamilyRef, Options, WriteBatchWithTr
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use zerocopy::{AsBytes, FromBytes};
+use omnipaxos::storage::LogHash;
 
 const DEFAULT: &str = "/default_storage/";
 const LOG: &str = "log";
@@ -452,5 +453,12 @@ where
         self.db
             .delete_range_cf(self.get_log_handle(), from_key, to_key)?;
         Ok(())
+    }
+
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        let from = self.get_compacted_idx()?;
+        let to = from.saturating_add(to);
+        let entries = self.get_entries(from, to)?;
+        Ok(LogHash::compute(&entries))
     }
 }
