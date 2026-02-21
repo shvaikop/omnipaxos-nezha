@@ -481,6 +481,11 @@ mod tests {
 
         impl Entry for Value {
             type Snapshot = NoSnapshot;
+
+            /// This test_only Value impl always hashes to 0 for simplicity
+            fn stable_encode(&self, out: &mut Vec<u8>) {
+                out.push(0)
+            }
         }
 
         let nodes = vec![6, 7, 8];

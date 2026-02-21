@@ -27,6 +27,11 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
         impl ::omnipaxos::storage::Entry for #name
         {
             type Snapshot = #snapshot_type;
+
+            /// TODO: always gets encoded to 0, implement properly if will be needed
+            fn stable_encode(&self, out: &mut Vec<u8>) {
+                out.push(0)
+            }
         }
     };
 
@@ -160,6 +165,11 @@ pub fn unicache_entry_derive(input: TokenStream) -> TokenStream {
                     type NotEncodable = (#(#non_encodable_field_types,)*);
                     type EncodeResult = (#(#encode_result,)*);
                     type UniCache = #cache_name #ty_generics;
+
+                    /// TODO: always gets encoded to 0, implement properly if will be needed
+                    fn stable_encode(&self, out: &mut Vec<u8>) {
+                        out.push(0)
+                    }
                 }
 
                 #[derive(Clone, Debug)]

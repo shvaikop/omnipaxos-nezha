@@ -1,3 +1,4 @@
+use omnipaxos::storage::LogHash;
 use omnipaxos::{
     ballot_leader_election::Ballot,
     storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
@@ -452,5 +453,12 @@ where
         self.db
             .delete_range_cf(self.get_log_handle(), from_key, to_key)?;
         Ok(())
+    }
+
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        let from = self.get_compacted_idx()?;
+        let to = from.saturating_add(to);
+        let entries = self.get_entries(from, to)?;
+        Ok(LogHash::compute(&entries))
     }
 }
