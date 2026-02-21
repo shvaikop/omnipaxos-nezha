@@ -500,7 +500,7 @@ where
             }
         }
     }
-    
+
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         match self {
             StorageType::Persistent(persist_s) => persist_s.get_hash(to),

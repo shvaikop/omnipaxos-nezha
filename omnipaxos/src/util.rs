@@ -497,7 +497,7 @@ mod tests {
             fn set_request_id(&mut self, _request_id: uuid::Uuid) {
                 // no request ids used in this test entry
             }
-            
+
             /// This test_only Value impl always hashes to 0 for simplicity
             fn stable_encode(&self, out: &mut Vec<u8>) {
                 out.push(0)

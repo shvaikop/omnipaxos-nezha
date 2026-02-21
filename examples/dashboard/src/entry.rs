@@ -29,4 +29,10 @@ impl Entry for LogEntry {
     fn set_request_id(&mut self, request_id: RequestId) {
         self.request_id = request_id;
     }
+
+    fn stable_encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.value.to_le_bytes());
+        out.extend_from_slice(&self.deadline.to_le_bytes());
+        out.extend(self.request_id.to_bytes_le());
+    }
 }

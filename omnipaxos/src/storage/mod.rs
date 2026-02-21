@@ -236,7 +236,7 @@ where
 
     /// Updates the deadline of the entry at index `idx` in the log to `deadline`.
     fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()>;
-    
+
     /// Returns the hash of the log slice [0, to)
     fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
 }

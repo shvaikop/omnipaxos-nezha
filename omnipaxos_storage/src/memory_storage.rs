@@ -166,7 +166,7 @@ where
         entry.set_deadline(deadline);
         Ok(())
     }
-    
+
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         // TODO: log warning if to is outside the bounds
         let entries = self.log.get(0..to).unwrap_or(&[]);
