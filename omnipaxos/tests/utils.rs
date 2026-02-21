@@ -1,5 +1,6 @@
 use self::omnireplica::OmniPaxosComponent;
 use kompact::{config_keys::system, executors::crossbeam_workstealing_pool, prelude::*};
+use omnipaxos::storage::LogHash;
 use omnipaxos::{
     ballot_leader_election::Ballot,
     macros::*,
@@ -499,6 +500,17 @@ where
             }
         }
     }
+    
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.get_hash(to),
+            StorageType::Memory(mem_s) => mem_s.get_hash(to),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().get_hash(to)
+            }
+        }
+    }
 }
 
 pub struct TestSystem {
@@ -979,6 +991,10 @@ impl Value {
             #[cfg(feature = "unicache")]
             job: id.to_string(),
         }
+    }
+
+    pub fn stable_encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.id).to_le_bytes());
     }
 }
 

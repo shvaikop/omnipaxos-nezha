@@ -1,3 +1,4 @@
+use omnipaxos::storage::LogHash;
 use omnipaxos::{
     ballot_leader_election::Ballot,
     storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
@@ -480,5 +481,12 @@ where
 
     fn update_deadline(&mut self, _idx: usize, _deadline: u64) -> StorageResult<()> {
         Ok(())
+    }
+
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        let from = self.get_compacted_idx()?;
+        let to = from.saturating_add(to);
+        let entries = self.get_entries(from, to)?;
+        Ok(LogHash::compute(&entries))
     }
 }

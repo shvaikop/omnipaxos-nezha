@@ -43,6 +43,11 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
             fn set_request_id(&mut self, _request_id: ::uuid::Uuid) {
                 // default stub for derive users
             }
+            
+            /// TODO: always gets encoded to 0, implement properly if will be needed
+            fn stable_encode(&self, out: &mut Vec<u8>) {
+                out.push(0)
+            }
         }
     };
 
@@ -191,6 +196,11 @@ pub fn unicache_entry_derive(input: TokenStream) -> TokenStream {
 
                     fn set_request_id(&mut self, _request_id: ::uuid::Uuid) {
                         // default stub for derive users
+                    }
+                    
+                    /// TODO: always gets encoded to 0, implement properly if will be needed
+                    fn stable_encode(&self, out: &mut Vec<u8>) {
+                        out.push(0)
                     }
                 }
 

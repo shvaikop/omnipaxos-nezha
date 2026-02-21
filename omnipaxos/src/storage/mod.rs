@@ -1,5 +1,7 @@
 pub(crate) mod internal_storage;
 mod state_cache;
+mod storage_hash;
+pub use storage_hash::{EntryHash, LogHash};
 
 use super::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
@@ -18,6 +20,21 @@ pub trait Entry: Clone + Debug {
     #[cfg(feature = "serde")]
     /// The snapshot type for this entry type.
     type Snapshot: Snapshot<Self> + Serialize + for<'a> Deserialize<'a>;
+
+    /// Append a canonical, deterministic encoding of this entry to `out`.
+    ///
+    /// The produced bytes MUST be identical across:
+    /// - Different processes
+    /// - Different machines
+    /// - Different runs
+    ///
+    /// for equal logical entries.
+    ///
+    /// Unordered containers must be canonicalized before being hashed
+    ///
+    /// `out` is used instead of returning the result in order to minimize heap allocations
+    ///     Same buffer can be reused when hashing Entries sequentially
+    fn stable_encode(&self, out: &mut Vec<u8>);
 
     #[cfg(feature = "unicache")]
     /// The encoded type of some data. If there is a cache hit in UniCache, the data will be replaced and get sent over the network as this type instead. E.g., if `u8` then the cached `Entry` (or field of it) will be sent as `u8` instead.
@@ -219,6 +236,9 @@ where
 
     /// Updates the deadline of the entry at index `idx` in the log to `deadline`.
     fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()>;
+    
+    /// Returns the hash of the log slice [0, to)
+    fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.
