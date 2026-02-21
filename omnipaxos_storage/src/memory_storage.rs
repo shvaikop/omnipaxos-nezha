@@ -24,6 +24,8 @@ where
     snapshot: Option<T::Snapshot>,
     /// Stored StopSign
     stopsign: Option<StopSign>,
+    /// Sync point index.
+    sync_point: usize,
 }
 
 impl<T> Storage<T> for MemoryStorage<T>
@@ -45,6 +47,7 @@ where
                 StorageOp::Trim(idx) => self.trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
+                StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
             }
         }
         Ok(())
@@ -143,6 +146,16 @@ where
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
         Ok(self.snapshot.clone())
     }
+
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        self.sync_point = sync_point;
+        Ok(())
+    }
+
+    fn get_sync_point(&self) -> StorageResult<usize> {
+        Ok(self.sync_point)
+    }
+
 }
 
 impl<T: Entry> Default for MemoryStorage<T> {
@@ -156,6 +169,7 @@ impl<T: Entry> Default for MemoryStorage<T> {
             compacted_idx: 0,
             snapshot: None,
             stopsign: None,
+            sync_point: 0,
         }
     }
 }

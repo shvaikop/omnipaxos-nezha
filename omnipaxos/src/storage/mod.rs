@@ -124,6 +124,8 @@ pub enum StorageOp<T: Entry> {
     SetStopsign(Option<StopSign>),
     /// Sets the snapshot.
     SetSnapshot(Option<T::Snapshot>),
+    /// Sets the sync_point index in the log.
+    SetSyncPoint(usize),
 }
 
 /// Trait for implementing the storage backend of Sequence Paxos.
@@ -197,6 +199,12 @@ where
 
     /// Returns the stored snapshot.
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>>;
+
+    /// Sets the sync_point index in the log.
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()>;
+
+    /// Returns the sync_point index in the log.
+    fn get_sync_point(&self) -> StorageResult<usize>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.

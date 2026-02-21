@@ -466,6 +466,28 @@ where
             }
         }
     }
+
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.set_sync_point(sync_point),
+            StorageType::Memory(mem_s) => mem_s.set_sync_point(sync_point),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().set_sync_point(sync_point)
+            }
+        }
+    }
+
+    fn get_sync_point(&self) -> StorageResult<usize> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.get_sync_point(),
+            StorageType::Memory(mem_s) => mem_s.get_sync_point(),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().get_sync_point()
+            }
+        }
+    }
 }
 
 pub struct TestSystem {
