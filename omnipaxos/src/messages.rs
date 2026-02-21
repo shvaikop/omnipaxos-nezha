@@ -257,7 +257,6 @@ pub mod sequence_paxos {
         pub log_id: usize,
     }
 
-
     /// An enum for all the different message types.
     #[allow(missing_docs)]
     #[derive(Clone, Debug)]

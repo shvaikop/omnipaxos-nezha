@@ -216,6 +216,9 @@ where
 
     /// Returns the sync_point index in the log.
     fn get_sync_point(&self) -> StorageResult<usize>;
+
+    /// Updates the deadline of the entry at index `idx` in the log to `deadline`.
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.

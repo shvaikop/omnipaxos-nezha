@@ -488,6 +488,17 @@ where
             }
         }
     }
+
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.update_deadline(idx, deadline),
+            StorageType::Memory(mem_s) => mem_s.update_deadline(idx, deadline),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().update_deadline(idx, deadline)
+            }
+        }
+    }
 }
 
 pub struct TestSystem {

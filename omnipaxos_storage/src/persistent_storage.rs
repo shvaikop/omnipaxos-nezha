@@ -265,7 +265,6 @@ where
         self.write_batch.put(SYNC_POINT, sync_point_bytes);
         Ok(())
     }
-
 }
 
 /// An error returning the proposal that was failed due to that the current configuration is stopped.
@@ -466,7 +465,9 @@ where
     fn get_sync_point(&self) -> StorageResult<usize> {
         let sync_point = self.db.get_pinned(SYNC_POINT)?;
         match sync_point {
-            Some(sync_point_bytes) => Ok(usize::read_from(sync_point_bytes.as_bytes()).ok_or(ErrHelper {})?),
+            Some(sync_point_bytes) => {
+                Ok(usize::read_from(sync_point_bytes.as_bytes()).ok_or(ErrHelper {})?)
+            }
             None => Ok(0),
         }
     }
@@ -474,6 +475,10 @@ where
     fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
         let sync_point_bytes = usize::as_bytes(&sync_point);
         self.db.put(SYNC_POINT, sync_point_bytes)?;
+        Ok(())
+    }
+
+    fn update_deadline(&mut self, _idx: usize, _deadline: u64) -> StorageResult<()> {
         Ok(())
     }
 }

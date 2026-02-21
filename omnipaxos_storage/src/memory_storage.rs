@@ -156,6 +156,16 @@ where
         Ok(self.sync_point)
     }
 
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        let log_idx = idx.checked_sub(self.trimmed_idx).ok_or("log idx underflow");
+        let entry = match self.log.get_mut(log_idx?) {
+            Some(e) => e,
+            None => return Err("Index out of bounds".into()),
+        };
+
+        entry.set_deadline(deadline);
+        Ok(())
+    }
 }
 
 impl<T: Entry> Default for MemoryStorage<T> {
