@@ -43,6 +43,10 @@ pub trait Entry: Clone + Debug {
     #[cfg(all(feature = "unicache", feature = "serde"))]
     /// The unicache type for caching popular/re-occurring fields of an entry.
     type UniCache: UniCache<T = Self> + Serialize + for<'a> Deserialize<'a>;
+
+    /// Returns the deadline associated with this entry for Nezha/DOM scheduling logic.
+    /// Implementations that do not make use of deadlines may simply return `0`.
+    fn get_deadline(&self) -> u64;
 }
 
 /// A StopSign entry that marks the end of a configuration. Used for reconfiguration.

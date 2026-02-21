@@ -27,6 +27,10 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
         impl ::omnipaxos::storage::Entry for #name
         {
             type Snapshot = #snapshot_type;
+
+            fn get_deadline(&self) -> u64 {
+                0
+            }
         }
     };
 
@@ -160,6 +164,10 @@ pub fn unicache_entry_derive(input: TokenStream) -> TokenStream {
                     type NotEncodable = (#(#non_encodable_field_types,)*);
                     type EncodeResult = (#(#encode_result,)*);
                     type UniCache = #cache_name #ty_generics;
+
+                    fn get_deadline(&self) -> u64 {
+                        0
+                    }
                 }
 
                 #[derive(Clone, Debug)]

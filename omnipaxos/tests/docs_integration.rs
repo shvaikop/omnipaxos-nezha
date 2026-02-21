@@ -48,6 +48,10 @@ mod docs_integration_test {
     #[cfg(not(feature = "macros"))]
     impl Entry for KeyValue {
         type Snapshot = KVSnapshot;
+
+        fn get_deadline(&self) -> u64 {
+            0
+        }
     }
     // END_CODE_EXAMPLE
 

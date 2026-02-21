@@ -481,6 +481,10 @@ mod tests {
 
         impl Entry for Value {
             type Snapshot = NoSnapshot;
+
+            fn get_deadline(&self) -> u64 {
+                0
+            }
         }
 
         let nodes = vec![6, 7, 8];

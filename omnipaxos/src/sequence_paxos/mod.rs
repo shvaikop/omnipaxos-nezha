@@ -298,7 +298,7 @@ where
             PaxosMsg::FastReply(freply) => todo!(),
             PaxosMsg::SlowReply(sreply) => todo!(),
             PaxosMsg::LogStatus(ls) => todo!(),
-            PaxosMsg::LogModification(lm) => todo!(),
+            PaxosMsg::LogModifications(lm) => todo!(),
         }
     }
 
