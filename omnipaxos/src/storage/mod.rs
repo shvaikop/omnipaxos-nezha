@@ -4,7 +4,7 @@ mod state_cache;
 use super::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
 use crate::unicache::*;
-use crate::ClusterConfig;
+use crate::{messages::RequestId, ClusterConfig};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Debug};
@@ -47,6 +47,17 @@ pub trait Entry: Clone + Debug {
     /// Returns the deadline associated with this entry for Nezha/DOM scheduling logic.
     /// Implementations that do not make use of deadlines may simply return `0`.
     fn get_deadline(&self) -> u64;
+
+    /// Updates the deadline metadata stored within the entry.
+    /// Implementations that do not track deadlines may no-op.
+    fn set_deadline(&mut self, deadline: u64);
+
+    /// Returns the client request identifier associated with this entry.
+    /// Implementations that do not track request identifiers may return `Uuid::nil()`.
+    fn get_request_id(&self) -> RequestId;
+
+    /// Updates the request identifier metadata stored within the entry.
+    fn set_request_id(&mut self, request_id: RequestId);
 }
 
 /// A StopSign entry that marks the end of a configuration. Used for reconfiguration.

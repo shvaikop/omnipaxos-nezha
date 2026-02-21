@@ -75,7 +75,11 @@ fn main() {
     // wait for leader to be elected...
     std::thread::sleep(WAIT_LEADER_TIMEOUT);
     for i in 0..BATCH_SIZE {
-        let kv = LogEntry(i);
+        let kv = LogEntry {
+            value: i,
+            deadline: 0,
+            request_id: uuid::Uuid::new_v4(),
+        };
         server.lock().unwrap().append(kv).expect("append failed");
         std::thread::sleep(BATCH_PERIOD);
     }
@@ -85,7 +89,11 @@ fn main() {
         std::thread::sleep(WAIT_LEADER_TIMEOUT);
         // batch append log entries
         for i in 0..BATCH_SIZE {
-            let kv = LogEntry(i);
+            let kv = LogEntry {
+                value: i,
+                deadline: 0,
+                request_id: uuid::Uuid::new_v4(),
+            };
             server.lock().unwrap().append(kv).expect("append failed");
             std::thread::sleep(BATCH_PERIOD);
         }
