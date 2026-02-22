@@ -48,6 +48,7 @@ where
                 StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
                 StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
+                StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
             }
         }
         Ok(())

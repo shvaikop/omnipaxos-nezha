@@ -152,8 +152,12 @@ pub enum StorageOp<T: Entry> {
     SetStopsign(Option<StopSign>),
     /// Sets the snapshot.
     SetSnapshot(Option<T::Snapshot>),
+
+    /// Nezha optimization specific
     /// Sets the sync_point index in the log.
     SetSyncPoint(usize),
+    /// Update the deadline (u64) of an entry in the log at index (usize)
+    UpdateDeadline(usize, u64),
 }
 
 /// Trait for implementing the storage backend of Sequence Paxos.
