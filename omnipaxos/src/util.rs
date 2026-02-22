@@ -87,6 +87,9 @@ where
     // The number of promises needed in the prepare phase to become synced and
     // the number of accepteds needed in the accept phase to decide an entry.
     pub quorum: Quorum,
+
+    // Nezha fast-path optimization related
+    sorted_accepted_indexes: Vec<usize>,
 }
 
 impl<T> LeaderState<T>
@@ -104,6 +107,7 @@ where
             latest_accept_meta: vec![None; max_pid],
             max_pid,
             quorum,
+            sorted_accepted_indexes: vec![0; max_pid],
         }
     }
 
@@ -227,7 +231,36 @@ where
     }
 
     pub fn set_accepted_idx(&mut self, pid: NodeId, idx: usize) {
-        self.accepted_indexes[Self::pid_to_idx(pid)] = idx;
+        let node_idx = Self::pid_to_idx(pid);
+        let old_accepted_idx = self.accepted_indexes[node_idx];
+
+        // If sent sync_idx is smaller or equal to current then do nothing
+        if idx < old_accepted_idx {
+            return;
+        }
+
+        // Update unsorted structure
+        self.accepted_indexes[node_idx] = idx;
+
+        // Update the sorted vector, used in `get_commit_idx` to avoid recomputing each time
+        // Remove old value from sorted vector
+        if let Ok(pos) = self
+            .sorted_accepted_indexes
+            .binary_search(&old_accepted_idx)
+        {
+            self.sorted_accepted_indexes.remove(pos);
+        } else {
+            // This should never happen if invariants are correct
+            debug_assert!(false, "Old sync_idx not found in sorted vector");
+        }
+
+        // Insert new value into sorted position
+        let insert_pos = self
+            .sorted_accepted_indexes
+            .binary_search(&idx)
+            .unwrap_or_else(|pos| pos);
+
+        self.sorted_accepted_indexes.insert(insert_pos, idx);
     }
 
     pub fn get_latest_accept_meta(&self, pid: NodeId) -> Option<(Ballot, usize)> {
@@ -256,6 +289,18 @@ where
             .filter(|la| **la >= idx)
             .count();
         self.quorum.is_accept_quorum(num_accepted)
+    }
+
+    pub fn get_commit_idx(&self) -> usize {
+        // Required quorum size, assuming the leader has the furthest sync_idx already
+        let quorum_size = self.quorum.get_write_quorum_size().saturating_sub(1);
+        // The index of the max sync_point (if synced_indexes_values was sorted) which a quorum returned
+        let nth_smallest_idx = self.sorted_accepted_indexes.len() - quorum_size;
+
+        // `sorted_accepted_indexes` must be cloned because `select_nth_unstable` reorders in place
+        let mut sorted_synced_indexes_cloned = self.sorted_accepted_indexes.clone();
+        let (_, commit_idx, _) = sorted_synced_indexes_cloned.select_nth_unstable(nth_smallest_idx);
+        *commit_idx
     }
 }
 
@@ -459,6 +504,20 @@ impl Quorum {
             Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.write_quorum_size,
         }
     }
+
+    pub(crate) fn get_read_quorum_size(&self) -> usize {
+        match self {
+            Quorum::Majority(majority) => *majority,
+            Quorum::Flexible(flex_quorum) => flex_quorum.read_quorum_size,
+        }
+    }
+
+    pub(crate) fn get_write_quorum_size(&self) -> usize {
+        match self {
+            Quorum::Majority(majority) => *majority,
+            Quorum::Flexible(flex_quorum) => flex_quorum.write_quorum_size,
+        }
+    }
 }
 
 /// The entries flushed due to an append operation
@@ -519,5 +578,106 @@ mod tests {
             LeaderState::<Value>::with(Ballot::with(1, 1, 1, max_pid), max_pid as usize, quorum);
         let prep_peers = leader_state.get_preparable_peers(&nodes);
         assert_eq!(prep_peers, nodes);
+    }
+
+    fn leader_state_with_quorum(quorum: Quorum, max_pid: usize) -> LeaderState<()> {
+        LeaderState::<()>::with(Ballot::with(1, 1, 1, max_pid as NodeId), max_pid, quorum)
+    }
+
+    #[test]
+    fn follower_sync_point_is_monotonic() {
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(3), 5);
+        leader_state.set_accepted_idx(2, 10);
+        leader_state.set_accepted_idx(2, 7);
+        leader_state.set_accepted_idx(2, 12);
+
+        // 5-node cluster => majority write quorum is 3 => need 2 followers; missing followers count as 0.
+        assert_eq!(leader_state.get_commit_idx(), 0);
+        leader_state.set_accepted_idx(3, 11);
+        assert_eq!(leader_state.get_commit_idx(), 11);
+    }
+
+    #[test]
+    fn commit_idx_uses_kth_largest_follower_sync_for_majority() {
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(3), 5);
+        leader_state.set_accepted_idx(2, 10);
+        leader_state.set_accepted_idx(3, 7);
+        leader_state.set_accepted_idx(4, 3);
+
+        // Need 2 followers in addition to leader. 2nd largest follower sync is 7.
+        assert_eq!(leader_state.get_commit_idx(), 7);
+    }
+
+    #[test]
+    fn commit_idx_uses_write_quorum_for_flexible_quorum() {
+        let quorum = Quorum::Flexible(FlexibleQuorum {
+            read_quorum_size: 4,
+            write_quorum_size: 2,
+        });
+        let mut leader_state = leader_state_with_quorum(quorum, 5);
+        leader_state.set_accepted_idx(2, 4);
+        leader_state.set_accepted_idx(3, 9);
+
+        // Write quorum is 2 total => only 1 follower is needed; commit should be max follower sync.
+        assert_eq!(leader_state.get_commit_idx(), 9);
+    }
+
+    #[test]
+    fn commit_idx_treats_missing_followers_as_zero() {
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(3), 5);
+        leader_state.set_accepted_idx(2, 8);
+
+        // Need 2 followers, but only one has reported. Missing followers are padded as 0.
+        assert_eq!(leader_state.get_commit_idx(), 0);
+    }
+
+    #[test]
+    fn commit_idx_majority_with_one_leader_and_eight_followers() {
+        // 9 nodes total => majority write quorum = 5 => need 4 followers in addition to leader.
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(5), 9);
+
+        leader_state.set_accepted_idx(2, 12);
+        leader_state.set_accepted_idx(3, 8);
+        leader_state.set_accepted_idx(4, 11);
+        leader_state.set_accepted_idx(5, 5);
+        leader_state.set_accepted_idx(6, 9);
+        leader_state.set_accepted_idx(7, 3);
+        leader_state.set_accepted_idx(8, 1);
+        leader_state.set_accepted_idx(9, 10);
+
+        // Sorted desc: [12,11,10,9,8,5,3,1], 4th largest = 9
+        assert_eq!(leader_state.get_commit_idx(), 9);
+    }
+
+    #[test]
+    fn commit_idx_majority_with_partial_reports_in_large_cluster() {
+        // 9 nodes total => majority write quorum = 5 => need 4 followers.
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(5), 9);
+
+        leader_state.set_accepted_idx(2, 6);
+        leader_state.set_accepted_idx(3, 6);
+        leader_state.set_accepted_idx(4, 6);
+        // Only 3 followers reported; one more follower is effectively padded as 0.
+        assert_eq!(leader_state.get_commit_idx(), 0);
+
+        leader_state.set_accepted_idx(5, 4);
+        // Now 4 followers reported => 4th largest among followers is 4.
+        assert_eq!(leader_state.get_commit_idx(), 4);
+    }
+
+    #[test]
+    fn commit_idx_large_cluster_ignores_decreasing_updates_per_follower() {
+        // 9 nodes total => majority write quorum = 5 => need 4 followers.
+        let mut leader_state = leader_state_with_quorum(Quorum::Majority(5), 9);
+
+        leader_state.set_accepted_idx(2, 15);
+        leader_state.set_accepted_idx(3, 14);
+        leader_state.set_accepted_idx(4, 13);
+        leader_state.set_accepted_idx(5, 12);
+        assert_eq!(leader_state.get_commit_idx(), 12);
+
+        // Decreasing update for follower 5 should be ignored.
+        leader_state.set_accepted_idx(5, 2);
+        assert_eq!(leader_state.get_commit_idx(), 12);
     }
 }

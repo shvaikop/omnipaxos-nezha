@@ -413,4 +413,46 @@ where
             self.send_acceptdecide(metadata);
         }
     }
+
+    pub(crate) fn handle_log_status(&mut self, log_status: LogStatus, from: NodeId) {
+        if self.state.0 != Role::Leader {
+            return;
+        }
+        // If message belongs to wrong ballot then ignore it
+        if log_status.n != self.leader_state.n_leader {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Ignoring LogStatus message from ballot: {:?}, current balot: {:?}",
+                log_status.n,
+                self.leader_state.n_leader
+            );
+            return;
+        }
+        self.leader_state
+            .set_accepted_idx(from, log_status.sync_point);
+        let new_decided_idx = self.leader_state.get_commit_idx();
+        let old_decided_idx = self.internal_storage.get_decided_idx();
+        if new_decided_idx > old_decided_idx {
+            match self.internal_storage.set_decided_idx(new_decided_idx) {
+                Ok(()) => {
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "Updated decided index from {} to {}", old_decided_idx, new_decided_idx
+                    );
+                }
+                Err(_e) => {
+                    #[cfg(feature = "logging")]
+                    warn!(
+                        self.logger,
+                        "Failed to update decided index";
+                        "old_decided_idx" => old_decided_idx,
+                        "new_decided_idx" => new_decided_idx,
+                        "error" => _e.to_string()
+                    );
+                }
+            }
+        }
+    }
 }

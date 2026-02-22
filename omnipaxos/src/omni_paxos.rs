@@ -430,6 +430,11 @@ where
             cluster_state,
         }
     }
+
+    /// Send LogStatus to leader if currently follower
+    pub fn send_log_status(&mut self) {
+        self.seq_paxos.send_log_status();
+    }
 }
 
 /// An error indicating a failed proposal due to the current cluster configuration being already stopped
