@@ -299,6 +299,7 @@ where
                 StorageOp::SetStopsign(ss) => self.batch_set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.batch_set_snapshot(snap)?,
                 StorageOp::SetSyncPoint(sync_point) => self.batch_set_sync_point(sync_point)?,
+                StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
             }
         }
         Ok(self.db.write(std::mem::take(&mut self.write_batch))?)
