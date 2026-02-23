@@ -24,6 +24,8 @@ where
     snapshot: Option<T::Snapshot>,
     /// Stored StopSign
     stopsign: Option<StopSign>,
+    /// Sync point index.
+    sync_point: usize,
 }
 
 impl<T> Storage<T> for MemoryStorage<T>
@@ -45,6 +47,8 @@ where
                 StorageOp::Trim(idx) => self.trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
+                StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
+                StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
             }
         }
         Ok(())
@@ -144,6 +148,26 @@ where
         Ok(self.snapshot.clone())
     }
 
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        self.sync_point = sync_point;
+        Ok(())
+    }
+
+    fn get_sync_point(&self) -> StorageResult<usize> {
+        Ok(self.sync_point)
+    }
+
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        let log_idx = idx.checked_sub(self.trimmed_idx).ok_or("log idx underflow");
+        let entry = match self.log.get_mut(log_idx?) {
+            Some(e) => e,
+            None => return Err("Index out of bounds".into()),
+        };
+
+        entry.set_deadline(deadline);
+        Ok(())
+    }
+
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         // TODO: log warning if to is outside the bounds
         let entries = self.log.get(0..to).unwrap_or(&[]);
@@ -162,6 +186,7 @@ impl<T: Entry> Default for MemoryStorage<T> {
             compacted_idx: 0,
             snapshot: None,
             stopsign: None,
+            sync_point: 0,
         }
     }
 }

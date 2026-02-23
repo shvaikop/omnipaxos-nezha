@@ -482,6 +482,22 @@ mod tests {
         impl Entry for Value {
             type Snapshot = NoSnapshot;
 
+            fn get_deadline(&self) -> u64 {
+                0
+            }
+
+            fn set_deadline(&mut self, _deadline: u64) {
+                // no deadlines used in this test entry
+            }
+
+            fn get_request_id(&self) -> uuid::Uuid {
+                uuid::Uuid::nil()
+            }
+
+            fn set_request_id(&mut self, _request_id: uuid::Uuid) {
+                // no request ids used in this test entry
+            }
+
             /// This test_only Value impl always hashes to 0 for simplicity
             fn stable_encode(&self, out: &mut Vec<u8>) {
                 out.push(0)

@@ -1,4 +1,5 @@
 use super::state_cache::StateCache;
+use crate::storage::LogHash;
 use crate::{
     ballot_leader_election::Ballot,
     storage::{Entry, Snapshot, SnapshotType, StopSign, Storage, StorageOp, StorageResult},
@@ -530,5 +531,23 @@ where
     #[cfg(feature = "unicache")]
     pub(crate) fn set_unicache(&mut self, unicache: T::UniCache) {
         self.state_cache.unicache = unicache;
+    }
+
+    /// Nezha optimization specific
+    pub(crate) fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        self.state_cache.sync_idx = sync_point;
+        self.storage.set_sync_point(sync_point)
+    }
+
+    pub(crate) fn get_sync_point(&self) -> usize {
+        self.state_cache.sync_idx
+    }
+
+    pub(crate) fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        self.storage.update_deadline(idx, deadline)
+    }
+
+    pub(crate) fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        self.storage.get_hash(to)
     }
 }

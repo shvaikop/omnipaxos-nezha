@@ -6,7 +6,7 @@ pub use storage_hash::{EntryHash, LogHash};
 use super::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
 use crate::unicache::*;
-use crate::ClusterConfig;
+use crate::{messages::RequestId, ClusterConfig};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Debug};
@@ -60,6 +60,21 @@ pub trait Entry: Clone + Debug {
     #[cfg(all(feature = "unicache", feature = "serde"))]
     /// The unicache type for caching popular/re-occurring fields of an entry.
     type UniCache: UniCache<T = Self> + Serialize + for<'a> Deserialize<'a>;
+
+    /// Returns the deadline associated with this entry for Nezha/DOM scheduling logic.
+    /// Implementations that do not make use of deadlines may simply return `0`.
+    fn get_deadline(&self) -> u64;
+
+    /// Updates the deadline metadata stored within the entry.
+    /// Implementations that do not track deadlines may no-op.
+    fn set_deadline(&mut self, deadline: u64);
+
+    /// Returns the client request identifier associated with this entry.
+    /// Implementations that do not track request identifiers may return `Uuid::nil()`.
+    fn get_request_id(&self) -> RequestId;
+
+    /// Updates the request identifier metadata stored within the entry.
+    fn set_request_id(&mut self, request_id: RequestId);
 }
 
 /// A StopSign entry that marks the end of a configuration. Used for reconfiguration.
@@ -137,6 +152,12 @@ pub enum StorageOp<T: Entry> {
     SetStopsign(Option<StopSign>),
     /// Sets the snapshot.
     SetSnapshot(Option<T::Snapshot>),
+
+    /// Nezha optimization specific
+    /// Sets the sync_point index in the log.
+    SetSyncPoint(usize),
+    /// Update the deadline (u64) of an entry in the log at index (usize)
+    UpdateDeadline(usize, u64),
 }
 
 /// Trait for implementing the storage backend of Sequence Paxos.
@@ -210,6 +231,15 @@ where
 
     /// Returns the stored snapshot.
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>>;
+
+    /// Sets the sync_point index in the log.
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()>;
+
+    /// Returns the sync_point index in the log.
+    fn get_sync_point(&self) -> StorageResult<usize>;
+
+    /// Updates the deadline of the entry at index `idx` in the log to `deadline`.
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()>;
 
     /// Returns the hash of the log slice [0, to)
     fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
