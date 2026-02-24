@@ -288,4 +288,32 @@ where
             self.reply_accepted(self.get_promise(), new_accepted_idx);
         }
     }
+
+    pub(crate) fn send_log_status(&mut self) {
+        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
+            #[cfg(feature = "logging")]
+            debug!(
+                self.logger,
+                "Not sending log status message";
+                "from" => self.pid
+            );
+            return;
+        }
+        let log_status = LogStatus {
+            n: self.internal_storage.get_promise(),
+            sync_point: self.internal_storage.get_accepted_idx(),
+        };
+        #[cfg(feature = "logging")]
+        debug!(
+            self.logger,
+            "Sending log status message";
+            "from" => self.pid,
+            "msg" => format!("{:?}", log_status)
+        );
+        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            from: self.pid,
+            to: self.get_current_leader(),
+            msg: PaxosMsg::LogStatus(log_status),
+        }));
+    }
 }
