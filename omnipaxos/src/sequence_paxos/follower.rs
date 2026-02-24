@@ -290,54 +290,74 @@ where
     }
 
     pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
-        // get entries for the modification range, avoiding going out of bounds
-        let log_len = self.internal_storage.get_accepted_idx();
-        let upper = (self.sync_point + lm.modifications.len()).min(log_len);
-        let local_entries = if upper > self.sync_point {
-            self.internal_storage
-                .get_entries(self.sync_point, upper)
-                .expect(READ_ERROR_MSG)
-        } else {
-            Vec::new()
-        };
+        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
+            #[cfg(feature = "logging")]
+            debug!(self.logger, "Not sending log status message"; "from" => self.pid);
+            return;
+        }
+        if let Some(first_modification) = lm.modifications.first() {
+            if first_modification.log_id != self.sync_point {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "First log modification's log_id {} does not match sync_point {}",
+                    first_modification.log_id,
+                    self.sync_point
+                );
+            }
+        }
 
-        let append_start = self.apply_or_repair_modifications(&lm, &local_entries);
+        let mut append_start = None;
+
+        for modification in lm.modifications.iter() {
+            let local_entry = self
+                .internal_storage
+                .get_entry(modification.log_id)
+                .expect(READ_ERROR_MSG);
+
+            match local_entry {
+                Some(entry) => {
+                    // there is an entry at this index, check if it's the same request or not
+                    self.update_deadline_or_replace_entry(&entry, modification);
+                }
+                None => {
+                    // no entry at this index, need to append the rest of the modifications
+                    append_start = Some(modification.log_id);
+                    break;
+                }
+            }
+        }
+
+        // if append_start is Some, it means there are modifications that need to be appended
         if let Some(start) = append_start {
             self.append_missing_entries(&lm.modifications[start..]);
         }
 
-        // update sync point accordingly
-        self.sync_point += lm.modifications.len();
+        // update the accepted index to the end of the modifications, which is the new sync point for the leader
+        self.internal_storage
+            .set_accepted_idx(lm.modifications.last().unwrap().log_id)
+            .expect(WRITE_ERROR_MSG);
     }
 
-    fn apply_or_repair_modifications(
+    fn update_deadline_or_replace_entry(
         &mut self,
-        lm: &LogModifications<T>,
-        local_entries: &[T],
-    ) -> Option<usize> {
-        for (rel_idx, modification) in lm.modifications.iter().enumerate() {
-            let log_id = self.sync_point + rel_idx;
-
-            match local_entries.get(rel_idx) {
-                Some(local_entry) => {
-                    if local_entry.get_request_id() == modification.request_id {
-                        if local_entry.get_deadline() != modification.deadline {
-                            self.internal_storage
-                                .update_deadline(log_id, modification.deadline)
-                                .expect(WRITE_ERROR_MSG);
-                        }
-                    } else {
-                        let _ = self
-                            .internal_storage
-                            .replace_entry(log_id, modification.entry.clone())
-                            .expect(WRITE_ERROR_MSG);
-                    }
-                }
-                // no entry at this index, need to append the rest of the modifications
-                None => return Some(rel_idx),
+        entry: &T,
+        modification: &SingleLogModification<T>,
+    ) {
+        if entry.get_request_id() == modification.request_id {
+            if entry.get_deadline() != modification.deadline {
+                // same request but different deadline, update the deadline
+                self.internal_storage
+                    .update_deadline(modification.log_id, modification.deadline)
+                    .expect(WRITE_ERROR_MSG);
             }
+        } else {
+            // different request, replace the entry
+            let _old_entry = self
+                .internal_storage
+                .replace_entry(modification.log_id, modification.entry.clone())
+                .expect(WRITE_ERROR_MSG);
         }
-        None
     }
 
     fn append_missing_entries(&mut self, modifications: &[SingleLogModification<T>]) {
@@ -499,6 +519,7 @@ mod tests {
             TestEntry::new(20, request_2, 7),
         ];
         let mut paxos = create_seq_paxos(entries, 0);
+        paxos.state = (Role::Follower, Phase::Accept);
 
         let updated = vec![
             TestEntry::new(10, request_1, 15),
@@ -511,7 +532,6 @@ mod tests {
         let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
         assert_eq!(stored_entries[0].deadline, 15);
         assert_eq!(stored_entries[1].deadline, 25);
-        assert_eq!(paxos.sync_point, 2);
     }
 
     #[test]
@@ -519,6 +539,7 @@ mod tests {
         let matching = TestEntry::new(1, Uuid::new_v4(), 10);
         let to_replace = TestEntry::new(2, Uuid::new_v4(), 20);
         let mut paxos = create_seq_paxos(vec![matching.clone(), to_replace], 1);
+        paxos.state = (Role::Follower, Phase::Accept);
 
         let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
         let modifications = build_modifications(paxos.sync_point, vec![replacement.clone()]);
@@ -528,13 +549,13 @@ mod tests {
         let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
         assert_eq!(stored_entries[0], matching);
         assert_eq!(stored_entries[1], replacement);
-        assert_eq!(paxos.sync_point, 2);
     }
 
     #[test]
     fn appends_missing_entries_when_local_log_is_shorter() {
         let existing = TestEntry::new(1, Uuid::new_v4(), 11);
         let mut paxos = create_seq_paxos(vec![existing.clone()], 0);
+        paxos.state = (Role::Follower, Phase::Accept);
 
         let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
         let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
@@ -547,6 +568,5 @@ mod tests {
 
         let stored_entries = paxos.internal_storage.get_entries(0, 3).unwrap();
         assert_eq!(stored_entries, vec![existing, new_entry_1, new_entry_2]);
-        assert_eq!(paxos.sync_point, 3);
     }
 }

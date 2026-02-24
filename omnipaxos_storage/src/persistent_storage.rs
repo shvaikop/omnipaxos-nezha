@@ -363,6 +363,17 @@ where
         Ok(entries)
     }
 
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        if idx >= self.next_log_key {
+            return Ok(None);
+        }
+        let entry_bytes = self
+            .db
+            .get_cf(self.get_log_handle(), idx.to_be_bytes())?
+            .ok_or(ErrHelper {})?;
+        Ok(Some(bincode::deserialize(&entry_bytes)?))
+    }
+
     fn get_log_len(&self) -> StorageResult<usize> {
         Ok(self.next_log_key - self.get_compacted_idx()?)
     }

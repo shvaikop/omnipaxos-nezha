@@ -505,6 +505,7 @@ impl Quorum {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_read_quorum_size(&self) -> usize {
         match self {
             Quorum::Majority(majority) => *majority,

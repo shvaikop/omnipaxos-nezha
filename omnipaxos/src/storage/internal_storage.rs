@@ -482,9 +482,18 @@ where
         self.storage.get_entries(from, to)
     }
 
+    pub(crate) fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        self.storage.get_entry(idx)
+    }
+
     /// The length of the replicated log, as if log was never compacted.
     pub(crate) fn get_accepted_idx(&self) -> usize {
         self.state_cache.accepted_idx
+    }
+
+    pub(crate) fn set_accepted_idx(&mut self, accepted_idx: usize) -> StorageResult<()> {
+        self.state_cache.accepted_idx = accepted_idx;
+        Ok(())
     }
 
     pub(crate) fn get_suffix(&self, from: usize) -> StorageResult<Vec<T>> {

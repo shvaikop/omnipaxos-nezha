@@ -358,6 +358,17 @@ where
         }
     }
 
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.get_entry(idx),
+            StorageType::Memory(mem_s) => mem_s.get_entry(idx),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().get_entry(idx)
+            }
+        }
+    }
+
     fn get_log_len(&self) -> StorageResult<usize> {
         match self {
             StorageType::Persistent(persist_s) => persist_s.get_log_len(),

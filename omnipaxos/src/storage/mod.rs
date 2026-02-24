@@ -203,6 +203,9 @@ where
     /// If entries **do not exist for the complete interval**, an empty Vector should be returned.
     fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>>;
 
+    /// Returns the entry in the log at index `idx`. If no entry exists at `idx`, returns `Ok(None)`.
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>>;
+
     /// Returns the current length of the log (without the trimmed/snapshotted entries).
     fn get_log_len(&self) -> StorageResult<usize>;
 

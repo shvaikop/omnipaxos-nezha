@@ -416,20 +416,15 @@ where
 
     #[allow(dead_code)]
     pub(crate) fn broadcast_log_modifications(&mut self) {
-        // only broadcast log modifications if there is a sync point to update from
-        if self.sync_point == 0 {
-            return;
-        }
-
-        let n = self.leader_state.n_leader;
+        let n: Ballot = self.leader_state.n_leader;
 
         for pid in self.leader_state.get_promised_followers() {
-            // TODO: combine with the HashMap of accepted indexes to only send modifications that are relevant to each follower
-            // collect log modifications since last sync point
-            let follower_sync_point = 0;
+            let leader_accepted_idx = self.internal_storage.get_accepted_idx();
+            let follower_accepted_idx = self.leader_state.get_accepted_idx(pid);
+
             let entries = self
                 .internal_storage
-                .get_entries(follower_sync_point, self.sync_point)
+                .get_entries(follower_accepted_idx, leader_accepted_idx + 1)
                 .expect(READ_ERROR_MSG);
 
             let modifications: Vec<SingleLogModification<T>> = entries
@@ -438,7 +433,7 @@ where
                 .map(|(offset, entry)| SingleLogModification {
                     request_id: entry.get_request_id(),
                     deadline: entry.get_deadline(),
-                    log_id: follower_sync_point + offset,
+                    log_id: follower_accepted_idx + offset + 1,
                     entry: entry.clone(),
                 })
                 .collect();

@@ -102,6 +102,14 @@ where
         Ok(self.log.get(from..to).unwrap_or(&[]).to_vec())
     }
 
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        if idx < self.trimmed_idx {
+            return Ok(None);
+        }
+        let rel = idx - self.trimmed_idx;
+        Ok(self.log.get(rel).cloned())
+    }
+
     fn get_log_len(&self) -> StorageResult<usize> {
         Ok(self.log.len())
     }

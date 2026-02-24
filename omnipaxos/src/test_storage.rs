@@ -130,6 +130,11 @@ impl<T: Entry> Storage<T> for TestStorage<T> {
         Ok(self.log[start..end].to_vec())
     }
 
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        let rel = self.relative_index(idx)?;
+        Ok(self.log.get(rel).cloned())
+    }
+
     fn get_log_len(&self) -> StorageResult<usize> {
         Ok(self.log.len())
     }
