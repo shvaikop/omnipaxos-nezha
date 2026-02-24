@@ -300,7 +300,9 @@ where
                 StorageOp::SetSnapshot(snap) => self.batch_set_snapshot(snap)?,
                 StorageOp::SetSyncPoint(sync_point) => self.batch_set_sync_point(sync_point)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
-                StorageOp::ReplaceEntry(idx, new_entry) => self.replace_entry(idx, new_entry)?,
+                StorageOp::ReplaceEntry(idx, new_entry) => {
+                    let _ = self.replace_entry(idx, new_entry)?;
+                }
             }
         }
         Ok(self.db.write(std::mem::take(&mut self.write_batch))?)
@@ -492,11 +494,16 @@ where
         Ok(LogHash::compute(&entries))
     }
 
-    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
         let key = idx.to_be_bytes();
+        let old_entry_bytes = self
+            .db
+            .get_cf(self.get_log_handle(), key)?
+            .ok_or("Index out of bounds")?;
+        let old_entry = bincode::deserialize(&old_entry_bytes)?;
         let new_entry_bytes = bincode::serialize(&new_entry)?;
         self.db
             .put_cf(self.get_log_handle(), key, new_entry_bytes)?;
-        Ok(())
+        Ok(old_entry)
     }
 }

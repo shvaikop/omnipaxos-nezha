@@ -290,10 +290,16 @@ where
     }
 
     pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
-        let local_entries = self
-            .internal_storage
-            .get_entries(self.sync_point, self.sync_point + lm.modifications.len())
-            .expect(READ_ERROR_MSG);
+        // get entries for the modification range, avoiding going out of bounds
+        let log_len = self.internal_storage.get_accepted_idx();
+        let upper = (self.sync_point + lm.modifications.len()).min(log_len);
+        let local_entries = if upper > self.sync_point {
+            self.internal_storage
+                .get_entries(self.sync_point, upper)
+                .expect(READ_ERROR_MSG)
+        } else {
+            Vec::new()
+        };
 
         let append_start = self.apply_or_repair_modifications(&lm, &local_entries);
         if let Some(start) = append_start {
@@ -321,7 +327,8 @@ where
                                 .expect(WRITE_ERROR_MSG);
                         }
                     } else {
-                        self.internal_storage
+                        let _ = self
+                            .internal_storage
                             .replace_entry(log_id, modification.entry.clone())
                             .expect(WRITE_ERROR_MSG);
                     }
@@ -338,5 +345,180 @@ where
         self.internal_storage
             .append_entries_without_batching(entries)
             .expect(WRITE_ERROR_MSG);
+    }
+}
+
+#[cfg(all(test, not(feature = "unicache")))]
+mod tests {
+    use super::*;
+    use crate::test_storage::TestStorage;
+    use crate::{
+        messages::sequence_paxos::{LogModifications, SingleLogModification},
+        messages::RequestId,
+        storage::{Entry, Snapshot},
+        ClusterConfig, OmniPaxosConfig, ServerConfig,
+    };
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct TestEntry {
+        value: u64,
+        request_id: RequestId,
+        deadline: u64,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct TestSnapshot;
+
+    impl Snapshot<TestEntry> for TestSnapshot {
+        fn create(_: &[TestEntry]) -> Self {
+            Self
+        }
+
+        fn merge(&mut self, _: Self) {}
+
+        fn use_snapshots() -> bool {
+            false
+        }
+    }
+
+    impl Entry for TestEntry {
+        type Snapshot = TestSnapshot;
+
+        fn stable_encode(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.value.to_le_bytes());
+            out.extend_from_slice(self.request_id.as_bytes());
+            out.extend_from_slice(&self.deadline.to_le_bytes());
+        }
+
+        fn get_deadline(&self) -> u64 {
+            self.deadline
+        }
+
+        fn set_deadline(&mut self, deadline: u64) {
+            self.deadline = deadline;
+        }
+
+        fn get_request_id(&self) -> RequestId {
+            self.request_id
+        }
+
+        fn set_request_id(&mut self, request_id: RequestId) {
+            self.request_id = request_id;
+        }
+    }
+
+    impl TestEntry {
+        fn new(value: u64, request_id: RequestId, deadline: u64) -> Self {
+            Self {
+                value,
+                request_id,
+                deadline,
+            }
+        }
+    }
+
+    fn create_seq_paxos(
+        entries: Vec<TestEntry>,
+        sync_point: usize,
+    ) -> SequencePaxos<TestEntry, TestStorage<TestEntry>> {
+        let cluster_config = ClusterConfig {
+            configuration_id: 1,
+            nodes: vec![1, 2],
+            flexible_quorum: None,
+        };
+        let server_config = ServerConfig {
+            pid: 1,
+            ..ServerConfig::default()
+        };
+        let omni_config = OmniPaxosConfig {
+            cluster_config,
+            server_config,
+        };
+        let storage = TestStorage::with_entries(entries);
+        let mut paxos = SequencePaxos::with(omni_config.into(), storage);
+        paxos.sync_point = sync_point;
+        paxos
+    }
+
+    fn build_modifications(
+        start_log_idx: usize,
+        entries: Vec<TestEntry>,
+    ) -> LogModifications<TestEntry> {
+        let modifications = entries
+            .into_iter()
+            .enumerate()
+            .map(|(offset, entry)| SingleLogModification {
+                request_id: entry.request_id,
+                deadline: entry.deadline,
+                log_id: start_log_idx + offset,
+                entry,
+            })
+            .collect();
+        LogModifications {
+            n: Ballot::default(),
+            modifications,
+        }
+    }
+
+    #[test]
+    fn updates_deadlines_for_matching_entries() {
+        let request_1 = Uuid::new_v4();
+        let request_2 = Uuid::new_v4();
+        let entries = vec![
+            TestEntry::new(10, request_1, 5),
+            TestEntry::new(20, request_2, 7),
+        ];
+        let mut paxos = create_seq_paxos(entries, 0);
+
+        let updated = vec![
+            TestEntry::new(10, request_1, 15),
+            TestEntry::new(20, request_2, 25),
+        ];
+        let modifications = build_modifications(paxos.sync_point, updated);
+
+        paxos.handle_log_modifications(modifications);
+
+        let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
+        assert_eq!(stored_entries[0].deadline, 15);
+        assert_eq!(stored_entries[1].deadline, 25);
+        assert_eq!(paxos.sync_point, 2);
+    }
+
+    #[test]
+    fn replaces_entry_when_request_id_differs() {
+        let matching = TestEntry::new(1, Uuid::new_v4(), 10);
+        let to_replace = TestEntry::new(2, Uuid::new_v4(), 20);
+        let mut paxos = create_seq_paxos(vec![matching.clone(), to_replace], 1);
+
+        let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
+        let modifications = build_modifications(paxos.sync_point, vec![replacement.clone()]);
+
+        paxos.handle_log_modifications(modifications);
+
+        let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
+        assert_eq!(stored_entries[0], matching);
+        assert_eq!(stored_entries[1], replacement);
+        assert_eq!(paxos.sync_point, 2);
+    }
+
+    #[test]
+    fn appends_missing_entries_when_local_log_is_shorter() {
+        let existing = TestEntry::new(1, Uuid::new_v4(), 11);
+        let mut paxos = create_seq_paxos(vec![existing.clone()], 0);
+
+        let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
+        let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
+        let modifications = build_modifications(
+            paxos.sync_point,
+            vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
+        );
+
+        paxos.handle_log_modifications(modifications);
+
+        let stored_entries = paxos.internal_storage.get_entries(0, 3).unwrap();
+        assert_eq!(stored_entries, vec![existing, new_entry_1, new_entry_2]);
+        assert_eq!(paxos.sync_point, 3);
     }
 }

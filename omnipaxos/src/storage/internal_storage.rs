@@ -554,7 +554,7 @@ where
         self.storage.get_hash(to)
     }
 
-    pub(crate) fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+    pub(crate) fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
         self.storage.replace_entry(idx, new_entry)
     }
 }

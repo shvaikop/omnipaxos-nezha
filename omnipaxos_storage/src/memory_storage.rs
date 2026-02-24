@@ -49,7 +49,9 @@ where
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
                 StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
-                StorageOp::ReplaceEntry(idx, new_entry) => self.replace_entry(idx, new_entry)?,
+                StorageOp::ReplaceEntry(idx, new_entry) => {
+                    let _ = self.replace_entry(idx, new_entry)?;
+                }
             }
         }
         Ok(())
@@ -175,7 +177,7 @@ where
         Ok(LogHash::compute(entries))
     }
 
-    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
         let log_idx = idx
             .checked_sub(self.trimmed_idx)
             .ok_or("log idx underflow")?;
@@ -184,8 +186,7 @@ where
             None => return Err("Index out of bounds".into()),
         };
 
-        std::mem::replace(old_entry, new_entry);
-        Ok(())
+        Ok(std::mem::replace(old_entry, new_entry))
     }
 }
 

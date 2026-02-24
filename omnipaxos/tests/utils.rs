@@ -512,7 +512,7 @@ where
         }
     }
 
-    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
         match self {
             StorageType::Persistent(persist_s) => persist_s.replace_entry(idx, new_entry),
             StorageType::Memory(mem_s) => mem_s.replace_entry(idx, new_entry),

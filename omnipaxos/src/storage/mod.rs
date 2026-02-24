@@ -246,8 +246,8 @@ where
     /// Returns the hash of the log slice [0, to)
     fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
 
-    /// Replaces the entry at index idx in the log with new_entry
-    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()>;
+    /// Replaces the entry at index `idx` in the log with `new_entry`, returning the previous entry.
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.
