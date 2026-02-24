@@ -298,8 +298,8 @@ where
             PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
             PaxosMsg::FastReply(_freply) => todo!(),
             PaxosMsg::SlowReply(_sreply) => todo!(),
-            PaxosMsg::LogStatus(_ls) => todo!(),
             PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
+            PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
         }
     }
 
