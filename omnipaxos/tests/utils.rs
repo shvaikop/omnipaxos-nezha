@@ -511,6 +511,17 @@ where
             }
         }
     }
+
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.replace_entry(idx, new_entry),
+            StorageType::Memory(mem_s) => mem_s.replace_entry(idx, new_entry),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().replace_entry(idx, new_entry)
+            }
+        }
+    }
 }
 
 pub struct TestSystem {

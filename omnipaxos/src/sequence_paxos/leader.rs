@@ -413,4 +413,41 @@ where
             self.send_acceptdecide(metadata);
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn broadcast_log_modifications(&mut self) {
+        // only broadcast log modifications if there is a sync point to update from
+        if self.sync_point == 0 {
+            return;
+        }
+
+        let n = self.leader_state.n_leader;
+
+        for pid in self.leader_state.get_promised_followers() {
+            // TODO: combine with the HashMap of accepted indexes to only send modifications that are relevant to each follower
+            // collect log modifications since last sync point
+            let follower_sync_point = 0;
+            let entries = self
+                .internal_storage
+                .get_entries(follower_sync_point, self.sync_point)
+                .expect(READ_ERROR_MSG);
+
+            let modifications: Vec<SingleLogModification<T>> = entries
+                .into_iter()
+                .enumerate()
+                .map(|(offset, entry)| SingleLogModification {
+                    request_id: entry.get_request_id(),
+                    deadline: entry.get_deadline(),
+                    log_id: follower_sync_point + offset,
+                    entry: entry.clone(),
+                })
+                .collect();
+
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: pid,
+                msg: PaxosMsg::LogModifications(LogModifications { n, modifications }),
+            }));
+        }
+    }
 }

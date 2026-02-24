@@ -158,6 +158,8 @@ pub enum StorageOp<T: Entry> {
     SetSyncPoint(usize),
     /// Update the deadline (u64) of an entry in the log at index (usize)
     UpdateDeadline(usize, u64),
+    /// Replaces the entry at index idx in the log with new_entry, returns the old entry
+    ReplaceEntry(usize, T),
 }
 
 /// Trait for implementing the storage backend of Sequence Paxos.
@@ -243,6 +245,9 @@ where
 
     /// Returns the hash of the log slice [0, to)
     fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
+
+    /// Replaces the entry at index idx in the log with new_entry
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.

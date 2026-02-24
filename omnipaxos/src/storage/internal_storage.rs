@@ -533,12 +533,14 @@ where
         self.state_cache.unicache = unicache;
     }
 
+    #[allow(dead_code)]
     /// Nezha optimization specific
     pub(crate) fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
         self.state_cache.sync_idx = sync_point;
         self.storage.set_sync_point(sync_point)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_sync_point(&self) -> usize {
         self.state_cache.sync_idx
     }
@@ -547,7 +549,12 @@ where
         self.storage.update_deadline(idx, deadline)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         self.storage.get_hash(to)
+    }
+
+    pub(crate) fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+        self.storage.replace_entry(idx, new_entry)
     }
 }

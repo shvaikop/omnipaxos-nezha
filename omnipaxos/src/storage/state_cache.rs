@@ -33,6 +33,7 @@ where
     #[cfg(feature = "unicache")]
     pub unicache: T::UniCache,
 
+    #[allow(dead_code)]
     /// Nezha optimization specific
     /// Index in log up to which log is synced with the leader
     pub sync_idx: usize,

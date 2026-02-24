@@ -288,4 +288,55 @@ where
             self.reply_accepted(self.get_promise(), new_accepted_idx);
         }
     }
+
+    pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
+        let local_entries = self
+            .internal_storage
+            .get_entries(self.sync_point, self.sync_point + lm.modifications.len())
+            .expect(READ_ERROR_MSG);
+
+        let append_start = self.apply_or_repair_modifications(&lm, &local_entries);
+        if let Some(start) = append_start {
+            self.append_missing_entries(&lm.modifications[start..]);
+        }
+
+        // update sync point accordingly
+        self.sync_point += lm.modifications.len();
+    }
+
+    fn apply_or_repair_modifications(
+        &mut self,
+        lm: &LogModifications<T>,
+        local_entries: &[T],
+    ) -> Option<usize> {
+        for (rel_idx, modification) in lm.modifications.iter().enumerate() {
+            let log_id = self.sync_point + rel_idx;
+
+            match local_entries.get(rel_idx) {
+                Some(local_entry) => {
+                    if local_entry.get_request_id() == modification.request_id {
+                        if local_entry.get_deadline() != modification.deadline {
+                            self.internal_storage
+                                .update_deadline(log_id, modification.deadline)
+                                .expect(WRITE_ERROR_MSG);
+                        }
+                    } else {
+                        self.internal_storage
+                            .replace_entry(log_id, modification.entry.clone())
+                            .expect(WRITE_ERROR_MSG);
+                    }
+                }
+                // no entry at this index, need to append the rest of the modifications
+                None => return Some(rel_idx),
+            }
+        }
+        None
+    }
+
+    fn append_missing_entries(&mut self, modifications: &[SingleLogModification<T>]) {
+        let entries: Vec<T> = modifications.iter().map(|m| m.entry.clone()).collect();
+        self.internal_storage
+            .append_entries_without_batching(entries)
+            .expect(WRITE_ERROR_MSG);
+    }
 }

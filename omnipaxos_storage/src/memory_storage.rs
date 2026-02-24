@@ -49,6 +49,7 @@ where
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
                 StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
+                StorageOp::ReplaceEntry(idx, new_entry) => self.replace_entry(idx, new_entry)?,
             }
         }
         Ok(())
@@ -172,6 +173,19 @@ where
         // TODO: log warning if to is outside the bounds
         let entries = self.log.get(0..to).unwrap_or(&[]);
         Ok(LogHash::compute(entries))
+    }
+
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<()> {
+        let log_idx = idx
+            .checked_sub(self.trimmed_idx)
+            .ok_or("log idx underflow")?;
+        let old_entry = match self.log.get_mut(log_idx) {
+            Some(e) => e,
+            None => return Err("Index out of bounds".into()),
+        };
+
+        std::mem::replace(old_entry, new_entry);
+        Ok(())
     }
 }
 
