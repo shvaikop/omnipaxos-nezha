@@ -479,7 +479,7 @@ mod tests {
 
     fn create_seq_paxos(
         entries: Vec<TestEntry>,
-        sync_point: usize,
+        accepted_idx: usize,
     ) -> SequencePaxos<TestEntry, TestStorage<TestEntry>> {
         let cluster_config = ClusterConfig {
             configuration_id: 1,
@@ -496,7 +496,7 @@ mod tests {
         };
         let storage = TestStorage::with_entries(entries);
         let mut paxos = SequencePaxos::with(omni_config.into(), storage);
-        paxos.sync_point = sync_point;
+        paxos.sync_point = accepted_idx;
         paxos
     }
 
@@ -522,61 +522,120 @@ mod tests {
 
     #[test]
     fn updates_deadlines_for_matching_entries() {
-        let request_1 = Uuid::new_v4();
-        let request_2 = Uuid::new_v4();
+        // create entries
+        let request_id_1 = Uuid::new_v4();
+        let request_id_2 = Uuid::new_v4();
         let entries = vec![
-            TestEntry::new(10, request_1, 5),
-            TestEntry::new(20, request_2, 7),
+            TestEntry::new(10, request_id_1, 5),
+            TestEntry::new(20, request_id_2, 7),
         ];
         let mut paxos = create_seq_paxos(entries, 0);
         paxos.state = (Role::Follower, Phase::Accept);
 
+        // create modifications with same request ids but different deadlines
         let updated = vec![
-            TestEntry::new(10, request_1, 15),
-            TestEntry::new(20, request_2, 25),
+            TestEntry::new(10, request_id_1, 15),
+            TestEntry::new(20, request_id_2, 25),
         ];
         let modifications = build_modifications(paxos.sync_point, updated);
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
         paxos.handle_log_modifications(modifications);
 
+        // the deadlines should be updated but the entries should not be replaced
         let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
         assert_eq!(stored_entries[0].deadline, 15);
         assert_eq!(stored_entries[1].deadline, 25);
+        assert_eq!(stored_entries[0].get_request_id(), request_id_1);
+        assert_eq!(stored_entries[1].get_request_id(), request_id_2);
+        assert_eq!(
+            paxos.internal_storage.get_accepted_idx(),
+            expected_accepted_idx
+        );
     }
 
     #[test]
     fn replaces_entry_when_request_id_differs() {
-        let matching = TestEntry::new(1, Uuid::new_v4(), 10);
+        // createa entries and let accepted_idx point to the second entry
+        let entry_below_accepted_idx = TestEntry::new(1, Uuid::new_v4(), 10);
         let to_replace = TestEntry::new(2, Uuid::new_v4(), 20);
-        let mut paxos = create_seq_paxos(vec![matching.clone(), to_replace], 1);
+        let mut paxos = create_seq_paxos(vec![entry_below_accepted_idx.clone(), to_replace], 1);
         paxos.state = (Role::Follower, Phase::Accept);
 
+        // create modification with different request id than the entry at accepted_idx
         let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
         let modifications = build_modifications(paxos.sync_point, vec![replacement.clone()]);
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
         paxos.handle_log_modifications(modifications);
 
+        // the entry at accepted_idx should be replaced but the entry below accepted_idx should NOT be replaced
         let stored_entries = paxos.internal_storage.get_entries(0, 2).unwrap();
-        assert_eq!(stored_entries[0], matching);
+        assert_eq!(stored_entries[0], entry_below_accepted_idx);
         assert_eq!(stored_entries[1], replacement);
+        assert_eq!(
+            paxos.internal_storage.get_accepted_idx(),
+            expected_accepted_idx
+        );
+    }
+
+    #[test]
+    fn replaces_two_entries_when_request_id_differs() {
+        // create three entries and let accepted_idx be 0
+        let untouched = TestEntry::new(1, Uuid::new_v4(), 10);
+        let to_replace_1 = TestEntry::new(2, Uuid::new_v4(), 20);
+        let to_replace_2 = TestEntry::new(3, Uuid::new_v4(), 25);
+
+        let mut paxos = create_seq_paxos(vec![untouched.clone(), to_replace_1, to_replace_2], 0);
+        paxos.state = (Role::Follower, Phase::Accept);
+
+        // create two modifications with different request ids than the entries at log idx 1 and 2
+        let replacement_1 = TestEntry::new(99, Uuid::new_v4(), 30);
+        let replacement_2 = TestEntry::new(100, Uuid::new_v4(), 35);
+
+        let modifications = build_modifications(
+            paxos.sync_point,
+            vec![untouched.clone(), replacement_1.clone(), replacement_2.clone()],
+        );
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+
+        paxos.handle_log_modifications(modifications);
+
+        // the entries at log idx 1 and 2 should be replaced but the entry at log idx 0 should NOT be replaced
+        let stored_entries = paxos.internal_storage.get_entries(0, 3).unwrap();
+        assert_eq!(stored_entries[0], untouched);
+        assert_eq!(stored_entries[1], replacement_1);
+        assert_eq!(stored_entries[2], replacement_2);
+        assert_eq!(
+            paxos.internal_storage.get_accepted_idx(),
+            expected_accepted_idx
+        );
     }
 
     #[test]
     fn appends_missing_entries_when_local_log_is_shorter() {
+        // create one entry and let accepted_idx point to it
         let existing = TestEntry::new(1, Uuid::new_v4(), 11);
         let mut paxos = create_seq_paxos(vec![existing.clone()], 0);
         paxos.state = (Role::Follower, Phase::Accept);
 
+        // adding enw entries with log idx 1 and 2, which are missing in the local log
         let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
         let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
         let modifications = build_modifications(
             paxos.sync_point,
             vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
         );
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
         paxos.handle_log_modifications(modifications);
 
+        // the existing entry should remain and the new entries should be appended
         let stored_entries = paxos.internal_storage.get_entries(0, 3).unwrap();
         assert_eq!(stored_entries, vec![existing, new_entry_1, new_entry_2]);
+        assert_eq!(
+            paxos.internal_storage.get_accepted_idx(),
+            expected_accepted_idx
+        );
     }
 }
