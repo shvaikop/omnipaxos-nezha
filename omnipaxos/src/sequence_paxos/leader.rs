@@ -17,6 +17,9 @@ where
         if n <= self.leader_state.n_leader || n <= self.internal_storage.get_promise() {
             return;
         }
+
+        // Leader has changed, all previous Nezha fast-path state is stale.
+        self.reply_set.clear();
         #[cfg(feature = "logging")]
         debug!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
@@ -109,6 +112,8 @@ where
     }
 
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
+        // TODO: implement DOM primitive and add deadline here?
+
         let accepted_metadata = self
             .internal_storage
             .append_entry_with_batching(entry)

@@ -459,6 +459,15 @@ impl Quorum {
             Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.write_quorum_size,
         }
     }
+
+    pub(crate) fn is_super_quorum(&self, num_nodes: usize) -> bool {
+        let f = match self {
+            Quorum::Majority(majority) => majority - 1,
+            Quorum::Flexible(flex_quorum) => flex_quorum.write_quorum_size - 1,
+        };
+        let super_quorum_size = (f + 1) / 2 + f + 1; // ceil(f/2) + f + 1
+        num_nodes >= super_quorum_size
+    }
 }
 
 /// The entries flushed due to an append operation

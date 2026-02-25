@@ -208,10 +208,13 @@ pub mod sequence_paxos {
     pub struct FastReply {
         /// The current round.
         pub n: Ballot,
+
+        // TODO: add boolean if this is from a leader, when handling just double check to see ballot is the same
         /// The id of the client request
         pub request_id: RequestId,
         /// Hash of all replicas logs
         pub log_hash: u64,
+        pub is_leader: bool,
     }
 
     /// Slow path reply from both leaders and followers to proxy
@@ -222,6 +225,12 @@ pub mod sequence_paxos {
         pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) enum NezhaReply {
+        Fast(FastReply),
+        Slow(SlowReply),
     }
 
     /// Periodically send from followers to the leader, reporting the follwer's sync-point

@@ -5,7 +5,7 @@ use crate::{
     messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
-        Entry, Snapshot, StopSign, Storage,
+        Entry, LogHash, Snapshot, StopSign, Storage,
     },
     util::{
         FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
@@ -16,7 +16,7 @@ use crate::{
 use slog::{debug, info, trace, warn, Logger};
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BTreeSet, BinaryHeap, HashMap},
     fmt::Debug,
     vec,
 };
@@ -48,8 +48,8 @@ where
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
-    sync_point: usize,
-    commit_point: usize,
+    reply_set: HashMap<RequestId, HashMap<NodeId, NezhaReply>>,
+    committed: HashMap<RequestId, bool>,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -111,8 +111,9 @@ where
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: HashMap::new(),
-            sync_point: 0,
-            commit_point: 0,
+            fast_committed: BTreeSet::new(),
+            request_to_log_index: HashMap::new(),
+            reply_set: HashMap::new(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -295,7 +296,7 @@ where
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
-            PaxosMsg::FastReply(freply) => todo!(),
+            PaxosMsg::FastReply(freply) => self.handle_fast_reply(freply, m.from),
             PaxosMsg::SlowReply(sreply) => todo!(),
             PaxosMsg::LogStatus(ls) => todo!(),
             PaxosMsg::LogModification(lm) => todo!(),
@@ -334,6 +335,126 @@ where
             self.early_buffer.push(Reverse(prep));
         } else {
             self.late_buffer.insert(prep.request_id, prep);
+        }
+    }
+
+    pub(crate) fn process_early_buffer(&mut self) {
+        while let Some(Reverse(prep)) = self.early_buffer.peek() {
+            // TODO: check against clock simulator if deadline has passed
+            if prep.deadline < 0 {
+                self.early_buffer.pop();
+                // TODO: append to log, get back an index (need to add append function that doesn't increment accepted_idx, could use a boolean param for this)
+                let index = 0; // placeholder
+                self.last_released_deadline = prep.deadline;
+
+                // TODO: what do we do here? Are we planning that all replicas send their reply to the leader, or does
+                // everyone send their reply back to the replica who originally got the client request and broadcasted it?
+                if self.state.0 == Role::Leader {
+                    self.reply_set
+                        .entry(prep.request_id)
+                        .or_insert_with(HashMap::new)
+                        .insert(
+                            self.pid,
+                            NezhaReply::Fast(FastReply {
+                                request_id: prep.request_id,
+                                log_hash: 0, // placeholder
+                                // log_hash: self.internal_storage.get_hash(index),
+                                n: self.internal_storage.get_promise(),
+                            }),
+                        );
+                } else {
+                    // push FastReply message to outgoing buffer to be sent to leader
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: self.get_current_leader(),
+                        msg: PaxosMsg::FastReply(FastReply {}),
+                    }));
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn handle_fast_reply(&mut self, freply: FastReply, from: NodeId) {
+        // If reply is from a previous ballot or if we have already received a reply from this node for this request, ignore
+        if freply.n < self.internal_storage.get_promise()
+            || self
+                .reply_set
+                .get(&freply.request_id)
+                .map_or(false, |m| m.contains_key(&from))
+        {
+            return;
+        }
+
+        let request_id = freply.request_id;
+        self.reply_set
+            .entry(freply.request_id)
+            .or_insert_with(HashMap::new)
+            .insert(from, NezhaReply::Fast(freply));
+
+        let committed_reply = self.check_committed(request_id);
+        if committed_reply {
+            // TODO: advance decided_idx to log index of this committed request
+        }
+    }
+
+    fn check_committed(&self, request_id: RequestId) -> bool {
+        // Get replies mapping for this request id: Map<NodeId, NezhaReply>
+        let replies = match self.reply_set.get(&request_id) {
+            Some(replies) => replies,
+            None => return false,
+        };
+
+        // Get leader's reply for this request id (always a FastReply)
+        let leader_pid = self.internal_storage.get_promise().pid;
+        let leader_reply = match replies.get(&leader_pid) {
+            Some(NezhaReply::Fast(f)) => f,
+            _ => return false,
+        };
+
+        // Count the number of fast and slow replies
+        let mut slow_reply_num = 0;
+        let mut fast_reply_num = 0;
+        for reply in replies.values() {
+            match reply {
+                NezhaReply::Slow(_) => {
+                    // Slow reply counts as a fast reply since follower's log is guaranteed to be up to date with the leader
+                    slow_reply_num += 1;
+                    fast_reply_num += 1;
+                }
+                NezhaReply::Fast(f) if f.log_hash == leader_reply.log_hash => {
+                    fast_reply_num += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // Request is committed if it has either a super quorum of fast replies or an accept quorum of slow replies
+        if self.leader_state.quorum.is_super_quorum(fast_reply_num)
+            || self.leader_state.quorum.is_accept_quorum(slow_reply_num)
+        {
+            #[cfg(feature = "logging")]
+            debug!(
+                self.logger,
+                "Request {:?} is committed with {} fast replies and {} slow replies",
+                request_id,
+                fast_reply_num,
+                slow_reply_num
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    fn try_advance_decided_idx(&mut self) {
+        let mut next = self.internal_storage.get_decided_idx() + 1;
+        while self.fast_committed.remove(&next) {
+            next += 1;
+        }
+        if next - 1 > self.internal_storage.get_decided_idx() {
+            self.internal_storage.set_decided_idx(next - 1);
         }
     }
 
@@ -385,6 +506,9 @@ where
     }
 
     fn propose_entry(&mut self, entry: T) {
+        // TODO: add deadline to entry
+        // broadcast message
+
         match self.state {
             (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
             (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
