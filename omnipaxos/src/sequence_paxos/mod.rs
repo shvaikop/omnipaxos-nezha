@@ -49,6 +49,7 @@ where
     last_released_deadline: u64, // TODO: use correct type for clock simulator
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     sync_point: usize,
+    #[allow(dead_code)]
     commit_point: usize,
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -295,9 +296,9 @@ where
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
-            PaxosMsg::FastReply(freply) => todo!(),
-            PaxosMsg::SlowReply(sreply) => todo!(),
-            PaxosMsg::LogModifications(lm) => todo!(),
+            PaxosMsg::FastReply(_freply) => todo!(),
+            PaxosMsg::SlowReply(_sreply) => todo!(),
+            PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
             PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
         }
     }
@@ -328,7 +329,7 @@ where
     pub(crate) fn handle_prepare_with_deadline(
         &mut self,
         prep: PrepareWithDeadline<T>,
-        from: NodeId,
+        _from: NodeId,
     ) {
         if prep.deadline > self.last_released_deadline {
             self.early_buffer.push(Reverse(prep));

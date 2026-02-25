@@ -414,6 +414,38 @@ where
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn broadcast_log_modifications(&mut self) {
+        let n: Ballot = self.leader_state.n_leader;
+
+        for pid in self.leader_state.get_promised_followers() {
+            let leader_accepted_idx = self.internal_storage.get_accepted_idx();
+            let follower_accepted_idx = self.leader_state.get_accepted_idx(pid);
+
+            let entries = self
+                .internal_storage
+                .get_entries(follower_accepted_idx, leader_accepted_idx + 1)
+                .expect(READ_ERROR_MSG);
+
+            let modifications: Vec<SingleLogModification<T>> = entries
+                .into_iter()
+                .enumerate()
+                .map(|(offset, entry)| SingleLogModification {
+                    request_id: entry.get_request_id(),
+                    deadline: entry.get_deadline(),
+                    log_id: follower_accepted_idx + offset + 1,
+                    entry: entry.clone(),
+                })
+                .collect();
+
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: pid,
+                msg: PaxosMsg::LogModifications(LogModifications { n, modifications }),
+            }));
+        }
+    }
+
     pub(crate) fn handle_log_status(&mut self, log_status: LogStatus, from: NodeId) {
         if self.state.0 != Role::Leader {
             return;

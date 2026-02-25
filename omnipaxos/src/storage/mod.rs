@@ -158,6 +158,8 @@ pub enum StorageOp<T: Entry> {
     SetSyncPoint(usize),
     /// Update the deadline (u64) of an entry in the log at index (usize)
     UpdateDeadline(usize, u64),
+    /// Replaces the entry at index idx in the log with new_entry, returns the old entry
+    ReplaceEntry(usize, T),
 }
 
 /// Trait for implementing the storage backend of Sequence Paxos.
@@ -201,6 +203,9 @@ where
     /// If entries **do not exist for the complete interval**, an empty Vector should be returned.
     fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>>;
 
+    /// Returns the entry in the log at index `idx`. If no entry exists at `idx`, returns `Ok(None)`.
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>>;
+
     /// Returns the current length of the log (without the trimmed/snapshotted entries).
     fn get_log_len(&self) -> StorageResult<usize>;
 
@@ -243,6 +248,9 @@ where
 
     /// Returns the hash of the log slice [0, to)
     fn get_hash(&self, to: usize) -> StorageResult<LogHash>;
+
+    /// Replaces the entry at index `idx` in the log with `new_entry`, returning the previous entry.
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T>;
 }
 
 /// A place holder type for when not using snapshots. You should not use this type, it is only internally when deriving the Entry implementation.
