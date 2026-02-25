@@ -292,17 +292,27 @@ where
     pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
         if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
             #[cfg(feature = "logging")]
-            debug!(self.logger, "Not sending log status message"; "from" => self.pid);
+            debug!(self.logger, "Not handling LogModifications message"; "from" => self.pid);
+            return;
+        }
+        if lm.n != self.leader_state.n_leader {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Ignoring LogModifications message from ballot: {:?}, current balot: {:?}",
+                lm.n,
+                self.leader_state.n_leader
+            );
             return;
         }
         if let Some(first_modification) = lm.modifications.first() {
-            if first_modification.log_id != self.sync_point {
+            if first_modification.log_id != self.internal_storage.get_accepted_idx() {
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
-                    "First log modification's log_id {} does not match sync_point {}",
+                    "First log modification's log_id {} does not match accepted_idx {}",
                     first_modification.log_id,
-                    self.sync_point
+                    self.internal_storage.get_accepted_idx()
                 );
             }
         }
