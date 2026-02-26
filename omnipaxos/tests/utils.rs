@@ -358,6 +358,17 @@ where
         }
     }
 
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.get_entry(idx),
+            StorageType::Memory(mem_s) => mem_s.get_entry(idx),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().get_entry(idx)
+            }
+        }
+    }
+
     fn get_log_len(&self) -> StorageResult<usize> {
         match self {
             StorageType::Persistent(persist_s) => persist_s.get_log_len(),
@@ -468,6 +479,39 @@ where
         }
     }
 
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.set_sync_point(sync_point),
+            StorageType::Memory(mem_s) => mem_s.set_sync_point(sync_point),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().set_sync_point(sync_point)
+            }
+        }
+    }
+
+    fn get_sync_point(&self) -> StorageResult<usize> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.get_sync_point(),
+            StorageType::Memory(mem_s) => mem_s.get_sync_point(),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().get_sync_point()
+            }
+        }
+    }
+
+    fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.update_deadline(idx, deadline),
+            StorageType::Memory(mem_s) => mem_s.update_deadline(idx, deadline),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().update_deadline(idx, deadline)
+            }
+        }
+    }
+
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         match self {
             StorageType::Persistent(persist_s) => persist_s.get_hash(to),
@@ -475,6 +519,17 @@ where
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
                 mem_s.lock().unwrap().get_hash(to)
+            }
+        }
+    }
+
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
+        match self {
+            StorageType::Persistent(persist_s) => persist_s.replace_entry(idx, new_entry),
+            StorageType::Memory(mem_s) => mem_s.replace_entry(idx, new_entry),
+            StorageType::Broken(mem_s, conf) => {
+                conf.lock().unwrap().tick()?;
+                mem_s.lock().unwrap().replace_entry(idx, new_entry)
             }
         }
     }

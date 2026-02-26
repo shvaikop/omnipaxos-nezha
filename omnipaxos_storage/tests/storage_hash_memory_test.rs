@@ -12,6 +12,22 @@ impl Entry for TestEntry {
     fn stable_encode(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.value.to_le_bytes());
     }
+
+    fn get_deadline(&self) -> u64 {
+        0
+    }
+
+    fn set_deadline(&mut self, _deadline: u64) {
+        // no-op for testing
+    }
+
+    fn get_request_id(&self) -> omnipaxos::messages::RequestId {
+        omnipaxos::messages::RequestId::new_v4()
+    }
+
+    fn set_request_id(&mut self, request_id: omnipaxos::messages::RequestId) {
+        // no-op for testing
+    }
 }
 
 #[test]

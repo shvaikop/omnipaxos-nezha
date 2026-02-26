@@ -28,6 +28,22 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
         {
             type Snapshot = #snapshot_type;
 
+            fn get_deadline(&self) -> u64 {
+                0
+            }
+
+            fn set_deadline(&mut self, _deadline: u64) {
+                // default stub for derive users
+            }
+
+            fn get_request_id(&self) -> ::uuid::Uuid {
+                ::uuid::Uuid::nil()
+            }
+
+            fn set_request_id(&mut self, _request_id: ::uuid::Uuid) {
+                // default stub for derive users
+            }
+
             /// TODO: always gets encoded to 0, implement properly if will be needed
             fn stable_encode(&self, out: &mut Vec<u8>) {
                 out.push(0)
@@ -165,6 +181,22 @@ pub fn unicache_entry_derive(input: TokenStream) -> TokenStream {
                     type NotEncodable = (#(#non_encodable_field_types,)*);
                     type EncodeResult = (#(#encode_result,)*);
                     type UniCache = #cache_name #ty_generics;
+
+                    fn get_deadline(&self) -> u64 {
+                        0
+                    }
+
+                    fn set_deadline(&mut self, _deadline: u64) {
+                        // default stub for derive users
+                    }
+
+                    fn get_request_id(&self) -> ::uuid::Uuid {
+                        ::uuid::Uuid::nil()
+                    }
+
+                    fn set_request_id(&mut self, _request_id: ::uuid::Uuid) {
+                        // default stub for derive users
+                    }
 
                     /// TODO: always gets encoded to 0, implement properly if will be needed
                     fn stable_encode(&self, out: &mut Vec<u8>) {

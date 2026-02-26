@@ -26,6 +26,8 @@ pub use omni_paxos::*;
 pub(crate) mod sequence_paxos;
 /// Traits and structs related to the backend storage of an OmniPaxos server.
 pub mod storage;
+#[cfg(test)]
+pub(crate) mod test_storage;
 
 #[cfg(feature = "unicache")]
 /// Traits, structs, and types related to the unicache.

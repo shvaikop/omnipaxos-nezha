@@ -297,9 +297,9 @@ where
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
             PaxosMsg::FastReply(freply) => self.handle_fast_reply(freply, m.from),
-            PaxosMsg::SlowReply(sreply) => todo!(),
-            PaxosMsg::LogStatus(ls) => todo!(),
-            PaxosMsg::LogModification(lm) => todo!(),
+            PaxosMsg::SlowReply(_sreply) => todo!(),
+            PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
+            PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
         }
     }
 
@@ -329,7 +329,7 @@ where
     pub(crate) fn handle_prepare_with_deadline(
         &mut self,
         prep: PrepareWithDeadline<T>,
-        from: NodeId,
+        _from: NodeId,
     ) {
         if prep.deadline > self.last_released_deadline {
             self.early_buffer.push(Reverse(prep));

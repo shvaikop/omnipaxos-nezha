@@ -16,6 +16,7 @@ const DECIDE: &[u8] = b"DECIDE";
 const TRIM: &[u8] = b"TRIM";
 const STOPSIGN: &[u8] = b"STOPSIGN";
 const SNAPSHOT: &[u8] = b"SNAPSHOT";
+const SYNC_POINT: &[u8] = b"SYNC_POINT";
 
 // Configuration for `PersistentStorage`.
 /// # Fields
@@ -259,6 +260,12 @@ where
         self.write_batch.put(SNAPSHOT, s);
         Ok(())
     }
+
+    fn batch_set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        let sync_point_bytes = usize::as_bytes(&sync_point);
+        self.write_batch.put(SYNC_POINT, sync_point_bytes);
+        Ok(())
+    }
 }
 
 /// An error returning the proposal that was failed due to that the current configuration is stopped.
@@ -291,6 +298,11 @@ where
                 StorageOp::Trim(idx) => self.batch_trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.batch_set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.batch_set_snapshot(snap)?,
+                StorageOp::SetSyncPoint(sync_point) => self.batch_set_sync_point(sync_point)?,
+                StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
+                StorageOp::ReplaceEntry(idx, new_entry) => {
+                    let _ = self.replace_entry(idx, new_entry)?;
+                }
             }
         }
         Ok(self.db.write(std::mem::take(&mut self.write_batch))?)
@@ -349,6 +361,17 @@ where
             iter.next();
         }
         Ok(entries)
+    }
+
+    fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        if idx >= self.next_log_key {
+            return Ok(None);
+        }
+        let entry_bytes = self
+            .db
+            .get_cf(self.get_log_handle(), idx.to_be_bytes())?
+            .ok_or(ErrHelper {})?;
+        Ok(Some(bincode::deserialize(&entry_bytes)?))
     }
 
     fn get_log_len(&self) -> StorageResult<usize> {
@@ -455,10 +478,43 @@ where
         Ok(())
     }
 
+    fn get_sync_point(&self) -> StorageResult<usize> {
+        let sync_point = self.db.get_pinned(SYNC_POINT)?;
+        match sync_point {
+            Some(sync_point_bytes) => {
+                Ok(usize::read_from(sync_point_bytes.as_bytes()).ok_or(ErrHelper {})?)
+            }
+            None => Ok(0),
+        }
+    }
+
+    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        let sync_point_bytes = usize::as_bytes(&sync_point);
+        self.db.put(SYNC_POINT, sync_point_bytes)?;
+        Ok(())
+    }
+
+    fn update_deadline(&mut self, _idx: usize, _deadline: u64) -> StorageResult<()> {
+        Ok(())
+    }
+
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
         let from = self.get_compacted_idx()?;
         let to = from.saturating_add(to);
         let entries = self.get_entries(from, to)?;
         Ok(LogHash::compute(&entries))
+    }
+
+    fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
+        let key = idx.to_be_bytes();
+        let old_entry_bytes = self
+            .db
+            .get_cf(self.get_log_handle(), key)?
+            .ok_or("Index out of bounds")?;
+        let old_entry = bincode::deserialize(&old_entry_bytes)?;
+        let new_entry_bytes = bincode::serialize(&new_entry)?;
+        self.db
+            .put_cf(self.get_log_handle(), key, new_entry_bytes)?;
+        Ok(old_entry)
     }
 }

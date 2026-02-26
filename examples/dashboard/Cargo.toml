@@ -12,3 +12,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 serde = { version = "1.0", features = ["derive"] }
 omnipaxos_ui = { path = "../../omnipaxos_ui" }
 
+[dependencies.uuid]
+version = "1.21.0"
+features = ["v4", "serde"]

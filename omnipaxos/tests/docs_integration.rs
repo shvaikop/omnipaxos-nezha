@@ -48,6 +48,22 @@ mod docs_integration_test {
     #[cfg(not(feature = "macros"))]
     impl Entry for KeyValue {
         type Snapshot = KVSnapshot;
+
+        fn get_deadline(&self) -> u64 {
+            0
+        }
+
+        fn set_deadline(&mut self, _deadline: u64) {
+            // docs example does not use deadlines
+        }
+
+        fn get_request_id(&self) -> uuid::Uuid {
+            uuid::Uuid::nil()
+        }
+
+        fn set_request_id(&mut self, _request_id: uuid::Uuid) {
+            // docs example does not use request ids
+        }
     }
     // END_CODE_EXAMPLE
 

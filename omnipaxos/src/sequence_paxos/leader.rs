@@ -418,4 +418,78 @@ where
             self.send_acceptdecide(metadata);
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn broadcast_log_modifications(&mut self) {
+        let n: Ballot = self.leader_state.n_leader;
+
+        for pid in self.leader_state.get_promised_followers() {
+            let leader_accepted_idx = self.internal_storage.get_accepted_idx();
+            let follower_accepted_idx = self.leader_state.get_accepted_idx(pid);
+
+            let entries = self
+                .internal_storage
+                .get_entries(follower_accepted_idx, leader_accepted_idx + 1)
+                .expect(READ_ERROR_MSG);
+
+            let modifications: Vec<SingleLogModification<T>> = entries
+                .into_iter()
+                .enumerate()
+                .map(|(offset, entry)| SingleLogModification {
+                    request_id: entry.get_request_id(),
+                    deadline: entry.get_deadline(),
+                    log_id: follower_accepted_idx + offset + 1,
+                    entry: entry.clone(),
+                })
+                .collect();
+
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: pid,
+                msg: PaxosMsg::LogModifications(LogModifications { n, modifications }),
+            }));
+        }
+    }
+
+    pub(crate) fn handle_log_status(&mut self, log_status: LogStatus, from: NodeId) {
+        if self.state.0 != Role::Leader {
+            return;
+        }
+        // If message belongs to wrong ballot then ignore it
+        if log_status.n != self.leader_state.n_leader {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Ignoring LogStatus message from ballot: {:?}, current balot: {:?}",
+                log_status.n,
+                self.leader_state.n_leader
+            );
+            return;
+        }
+        self.leader_state
+            .set_accepted_idx(from, log_status.sync_point);
+        let new_decided_idx = self.leader_state.get_commit_idx();
+        let old_decided_idx = self.internal_storage.get_decided_idx();
+        if new_decided_idx > old_decided_idx {
+            match self.internal_storage.set_decided_idx(new_decided_idx) {
+                Ok(()) => {
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "Updated decided index from {} to {}", old_decided_idx, new_decided_idx
+                    );
+                }
+                Err(_e) => {
+                    #[cfg(feature = "logging")]
+                    warn!(
+                        self.logger,
+                        "Failed to update decided index";
+                        "old_decided_idx" => old_decided_idx,
+                        "new_decided_idx" => new_decided_idx,
+                        "error" => _e.to_string()
+                    );
+                }
+            }
+        }
+    }
 }

@@ -1,4 +1,5 @@
 use super::state_cache::StateCache;
+use crate::storage::LogHash;
 use crate::{
     ballot_leader_election::Ballot,
     storage::{Entry, Snapshot, SnapshotType, StopSign, Storage, StorageOp, StorageResult},
@@ -481,9 +482,18 @@ where
         self.storage.get_entries(from, to)
     }
 
+    pub(crate) fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
+        self.storage.get_entry(idx)
+    }
+
     /// The length of the replicated log, as if log was never compacted.
     pub(crate) fn get_accepted_idx(&self) -> usize {
         self.state_cache.accepted_idx
+    }
+
+    pub(crate) fn set_accepted_idx(&mut self, accepted_idx: usize) -> StorageResult<()> {
+        self.state_cache.accepted_idx = accepted_idx;
+        Ok(())
     }
 
     pub(crate) fn get_suffix(&self, from: usize) -> StorageResult<Vec<T>> {
@@ -530,5 +540,30 @@ where
     #[cfg(feature = "unicache")]
     pub(crate) fn set_unicache(&mut self, unicache: T::UniCache) {
         self.state_cache.unicache = unicache;
+    }
+
+    #[allow(dead_code)]
+    /// Nezha optimization specific
+    pub(crate) fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
+        self.state_cache.sync_idx = sync_point;
+        self.storage.set_sync_point(sync_point)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_sync_point(&self) -> usize {
+        self.state_cache.sync_idx
+    }
+
+    pub(crate) fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
+        self.storage.update_deadline(idx, deadline)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
+        self.storage.get_hash(to)
+    }
+
+    pub(crate) fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
+        self.storage.replace_entry(idx, new_entry)
     }
 }

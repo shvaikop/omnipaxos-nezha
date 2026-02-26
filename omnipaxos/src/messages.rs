@@ -244,18 +244,31 @@ pub mod sequence_paxos {
     }
 
     /// Broadcast by the leader so followers can adjust their log entry at log_id.
-    /// E.g. insert the missing request or update its deadline to match the leader
+    /// Includes multiple LogModifications from followers sync_point
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct LogModification {
-        /// The current round.
+    pub struct LogModifications<T>
+    where
+        T: Entry,
+    {
+        /// Ballot number
         pub n: Ballot,
+        /// Multiple modifications under the same ballot
+        pub modifications: Vec<SingleLogModification<T>>,
+    }
+
+    /// Single log modification included in LogModifications
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct SingleLogModification<T: Entry> {
         /// The id of the client request
         pub request_id: RequestId,
         /// The deadline timestap when the message should be processed
         pub deadline: Timestamp,
         /// Position of this entry in the leader's log
         pub log_id: usize,
+        /// An entry that that leader has
+        pub entry: T,
     }
 
     /// An enum for all the different message types.
@@ -287,7 +300,7 @@ pub mod sequence_paxos {
         FastReply(FastReply),
         SlowReply(SlowReply),
         LogStatus(LogStatus),
-        LogModification(LogModification),
+        LogModifications(LogModifications<T>),
     }
 
     /// A struct for a Paxos message that also includes sender and receiver.

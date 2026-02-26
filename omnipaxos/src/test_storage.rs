@@ -1,45 +1,67 @@
-use omnipaxos::{
+#![cfg(test)]
+
+use crate::{
     ballot_leader_election::Ballot,
     storage::{Entry, LogHash, StopSign, Storage, StorageOp, StorageResult},
 };
-/// An in-memory storage implementation for SequencePaxos.
-#[derive(Clone)]
-pub struct MemoryStorage<T>
-where
-    T: Entry,
-{
-    /// Vector which contains all the logged entries in-memory.
+
+/// Simple in-memory storage implementation intended for unit tests.
+pub(crate) struct TestStorage<T: Entry> {
     log: Vec<T>,
-    /// Last promised round.
-    n_prom: Option<Ballot>,
-    /// Last accepted round.
-    acc_round: Option<Ballot>,
-    /// Length of the decided log.
-    ld: usize,
-    /// Garbage collected index.
     trimmed_idx: usize,
-    /// Stored compact index
+    promise: Option<Ballot>,
+    accepted_round: Option<Ballot>,
+    decided_idx: usize,
     compacted_idx: usize,
-    /// Stored snapshot
-    snapshot: Option<T::Snapshot>,
-    /// Stored StopSign
     stopsign: Option<StopSign>,
-    /// Sync point index.
+    snapshot: Option<T::Snapshot>,
     sync_point: usize,
 }
 
-impl<T> Storage<T> for MemoryStorage<T>
-where
-    T: Entry,
-{
+impl<T: Entry> Default for TestStorage<T> {
+    fn default() -> Self {
+        Self {
+            log: Vec::new(),
+            trimmed_idx: 0,
+            promise: None,
+            accepted_round: None,
+            decided_idx: 0,
+            compacted_idx: 0,
+            stopsign: None,
+            snapshot: None,
+            sync_point: 0,
+        }
+    }
+}
+
+impl<T: Entry> TestStorage<T> {
+    pub(crate) fn with_entries(entries: Vec<T>) -> Self {
+        Self {
+            log: entries,
+            ..Default::default()
+        }
+    }
+
+    fn relative_index(&self, idx: usize) -> StorageResult<usize> {
+        idx.checked_sub(self.trimmed_idx)
+            .ok_or_else(|| "index before trimmed region".into())
+            .and_then(|rel| {
+                if rel <= self.log.len() {
+                    Ok(rel)
+                } else {
+                    Err("index beyond log".into())
+                }
+            })
+    }
+}
+
+impl<T: Entry> Storage<T> for TestStorage<T> {
     fn write_atomically(&mut self, ops: Vec<StorageOp<T>>) -> StorageResult<()> {
         for op in ops {
             match op {
                 StorageOp::AppendEntry(entry) => self.append_entry(entry)?,
                 StorageOp::AppendEntries(entries) => self.append_entries(entries)?,
-                StorageOp::AppendOnPrefix(from_idx, entries) => {
-                    self.append_on_prefix(from_idx, entries)?
-                }
+                StorageOp::AppendOnPrefix(idx, entries) => self.append_on_prefix(idx, entries)?,
                 StorageOp::SetPromise(bal) => self.set_promise(bal)?,
                 StorageOp::SetDecidedIndex(idx) => self.set_decided_idx(idx)?,
                 StorageOp::SetAcceptedRound(bal) => self.set_accepted_round(bal)?,
@@ -47,10 +69,10 @@ where
                 StorageOp::Trim(idx) => self.trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
-                StorageOp::SetSyncPoint(sync_point) => self.set_sync_point(sync_point)?,
+                StorageOp::SetSyncPoint(sp) => self.set_sync_point(sp)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
-                StorageOp::ReplaceEntry(idx, new_entry) => {
-                    let _ = self.replace_entry(idx, new_entry)?;
+                StorageOp::ReplaceEntry(idx, entry) => {
+                    let _ = self.replace_entry(idx, entry)?;
                 }
             }
         }
@@ -62,51 +84,54 @@ where
         Ok(())
     }
 
-    fn append_entries(&mut self, entries: Vec<T>) -> StorageResult<()> {
-        let mut e = entries;
-        self.log.append(&mut e);
+    fn append_entries(&mut self, mut entries: Vec<T>) -> StorageResult<()> {
+        self.log.append(&mut entries);
         Ok(())
     }
 
     fn append_on_prefix(&mut self, from_idx: usize, entries: Vec<T>) -> StorageResult<()> {
-        self.log.truncate(from_idx - self.trimmed_idx);
+        let rel = self.relative_index(from_idx)?;
+        self.log.truncate(rel);
         self.append_entries(entries)
     }
 
     fn set_promise(&mut self, n_prom: Ballot) -> StorageResult<()> {
-        self.n_prom = Some(n_prom);
+        self.promise = Some(n_prom);
         Ok(())
     }
 
     fn set_decided_idx(&mut self, ld: usize) -> StorageResult<()> {
-        self.ld = ld;
+        self.decided_idx = ld;
         Ok(())
     }
 
     fn get_decided_idx(&self) -> StorageResult<usize> {
-        Ok(self.ld)
+        Ok(self.decided_idx)
     }
 
     fn set_accepted_round(&mut self, na: Ballot) -> StorageResult<()> {
-        self.acc_round = Some(na);
+        self.accepted_round = Some(na);
         Ok(())
     }
 
     fn get_accepted_round(&self) -> StorageResult<Option<Ballot>> {
-        Ok(self.acc_round)
+        Ok(self.accepted_round)
     }
 
     fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>> {
-        let from = from - self.trimmed_idx;
-        let to = to - self.trimmed_idx;
-        Ok(self.log.get(from..to).unwrap_or(&[]).to_vec())
+        if to <= from {
+            return Ok(vec![]);
+        }
+        let start = self.relative_index(from)?;
+        let end = self.relative_index(to)?.min(self.log.len());
+        if start > end {
+            return Ok(vec![]);
+        }
+        Ok(self.log[start..end].to_vec())
     }
 
     fn get_entry(&self, idx: usize) -> StorageResult<Option<T>> {
-        if idx < self.trimmed_idx {
-            return Ok(None);
-        }
-        let rel = idx - self.trimmed_idx;
+        let rel = self.relative_index(idx)?;
         Ok(self.log.get(rel).cloned())
     }
 
@@ -115,14 +140,12 @@ where
     }
 
     fn get_suffix(&self, from: usize) -> StorageResult<Vec<T>> {
-        Ok(match self.log.get((from - self.trimmed_idx)..) {
-            Some(s) => s.to_vec(),
-            None => vec![],
-        })
+        let start = self.relative_index(from)?.min(self.log.len());
+        Ok(self.log[start..].to_vec())
     }
 
     fn get_promise(&self) -> StorageResult<Option<Ballot>> {
-        Ok(self.n_prom)
+        Ok(self.promise)
     }
 
     fn set_stopsign(&mut self, s: Option<StopSign>) -> StorageResult<()> {
@@ -134,15 +157,17 @@ where
         Ok(self.stopsign.clone())
     }
 
-    fn trim(&mut self, trimmed_idx: usize) -> StorageResult<()> {
-        let to_trim = (trimmed_idx - self.trimmed_idx).min(self.log.len());
-        self.log.drain(0..to_trim);
-        self.trimmed_idx = trimmed_idx;
+    fn trim(&mut self, idx: usize) -> StorageResult<()> {
+        if idx > self.trimmed_idx {
+            let to_trim = (idx - self.trimmed_idx).min(self.log.len());
+            self.log.drain(0..to_trim);
+            self.trimmed_idx = idx;
+        }
         Ok(())
     }
 
-    fn set_compacted_idx(&mut self, compact_idx: usize) -> StorageResult<()> {
-        self.compacted_idx = compact_idx;
+    fn set_compacted_idx(&mut self, idx: usize) -> StorageResult<()> {
+        self.compacted_idx = idx;
         Ok(())
     }
 
@@ -169,47 +194,28 @@ where
     }
 
     fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
-        let log_idx = idx.checked_sub(self.trimmed_idx).ok_or("log idx underflow");
-        let entry = match self.log.get_mut(log_idx?) {
-            Some(e) => e,
-            None => return Err("Index out of bounds".into()),
-        };
-
-        entry.set_deadline(deadline);
-        Ok(())
+        let rel = self.relative_index(idx)?;
+        if let Some(entry) = self.log.get_mut(rel) {
+            entry.set_deadline(deadline);
+            Ok(())
+        } else {
+            Err("deadline index out of bounds".into())
+        }
     }
 
     fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
-        // TODO: log warning if to is outside the bounds
-        let entries = self.log.get(0..to).unwrap_or(&[]);
-        Ok(LogHash::compute(entries))
+        if to < self.trimmed_idx {
+            return Err("hash index before trim".into());
+        }
+        let rel_to = (to - self.trimmed_idx).min(self.log.len());
+        Ok(LogHash::compute(&self.log[..rel_to]))
     }
 
     fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
-        let log_idx = idx
-            .checked_sub(self.trimmed_idx)
-            .ok_or("log idx underflow")?;
-        let old_entry = match self.log.get_mut(log_idx) {
-            Some(e) => e,
-            None => return Err("Index out of bounds".into()),
-        };
-
-        Ok(std::mem::replace(old_entry, new_entry))
-    }
-}
-
-impl<T: Entry> Default for MemoryStorage<T> {
-    fn default() -> Self {
-        Self {
-            log: vec![],
-            n_prom: None,
-            acc_round: None,
-            ld: 0,
-            trimmed_idx: 0,
-            compacted_idx: 0,
-            snapshot: None,
-            stopsign: None,
-            sync_point: 0,
-        }
+        let rel = self.relative_index(idx)?;
+        self.log
+            .get_mut(rel)
+            .map(|entry| std::mem::replace(entry, new_entry))
+            .ok_or_else(|| "replace index out of bounds".into())
     }
 }
