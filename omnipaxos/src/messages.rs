@@ -15,7 +15,7 @@ pub type RequestId = uuid::Uuid;
 pub mod sequence_paxos {
     use crate::{
         ballot_leader_election::Ballot,
-        storage::{Entry, StopSign},
+        storage::{Entry, LogHash, StopSign},
         util::{LogSync, NodeId, SequenceNumber},
     };
     #[cfg(feature = "serde")]
@@ -170,6 +170,8 @@ pub mod sequence_paxos {
     {
         /// The id of the client request
         pub request_id: RequestId,
+        /// The node that originally received this entry from the client
+        pub from: NodeId,
         /// The entry to be proposed for replication
         pub entry: T,
         /// The timestamp when the message is sent
@@ -208,13 +210,10 @@ pub mod sequence_paxos {
     pub struct FastReply {
         /// The current round.
         pub n: Ballot,
-
-        // TODO: add boolean if this is from a leader, when handling just double check to see ballot is the same
         /// The id of the client request
         pub request_id: RequestId,
         /// Hash of all replicas logs
-        pub log_hash: u64,
-        pub is_leader: bool,
+        pub log_hash: LogHash,
     }
 
     /// Slow path reply from both leaders and followers to proxy

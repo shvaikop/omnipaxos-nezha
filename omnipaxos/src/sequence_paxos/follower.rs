@@ -373,7 +373,7 @@ where
     fn append_missing_entries(&mut self, modifications: &[SingleLogModification<T>]) {
         let entries: Vec<T> = modifications.iter().map(|m| m.entry.clone()).collect();
         self.internal_storage
-            .append_entries_without_batching(entries)
+            .append_entries_without_batching(entries, true)
             .expect(WRITE_ERROR_MSG);
     }
 
@@ -595,7 +595,11 @@ mod tests {
 
         let modifications = build_modifications(
             paxos.sync_point,
-            vec![untouched.clone(), replacement_1.clone(), replacement_2.clone()],
+            vec![
+                untouched.clone(),
+                replacement_1.clone(),
+                replacement_2.clone(),
+            ],
         );
         let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 

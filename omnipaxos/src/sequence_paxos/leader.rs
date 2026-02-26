@@ -112,8 +112,6 @@ where
     }
 
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
-        // TODO: implement DOM primitive and add deadline here?
-
         let accepted_metadata = self
             .internal_storage
             .append_entry_with_batching(entry)
@@ -271,7 +269,7 @@ where
                 let entries = std::mem::take(&mut self.buffered_proposals);
                 new_accepted_idx = self
                     .internal_storage
-                    .append_entries_without_batching(entries)
+                    .append_entries_without_batching(entries, true)
                     .expect(WRITE_ERROR_MSG);
             }
             if let Some(ss) = self.buffered_stopsign.take() {

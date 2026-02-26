@@ -5,7 +5,7 @@ use crate::{
     messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
-        Entry, LogHash, Snapshot, StopSign, Storage,
+        Entry, Snapshot, StopSign, Storage,
     },
     util::{
         FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
@@ -16,7 +16,7 @@ use crate::{
 use slog::{debug, info, trace, warn, Logger};
 use std::{
     cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap},
     fmt::Debug,
     vec,
 };
@@ -111,9 +111,8 @@ where
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: HashMap::new(),
-            fast_committed: BTreeSet::new(),
-            request_to_log_index: HashMap::new(),
             reply_set: HashMap::new(),
+            committed: HashMap::new(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -295,7 +294,7 @@ where
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
-            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
+            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep),
             PaxosMsg::FastReply(freply) => self.handle_fast_reply(freply, m.from),
             PaxosMsg::SlowReply(_sreply) => todo!(),
             PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
@@ -326,11 +325,7 @@ where
         }
     }
 
-    pub(crate) fn handle_prepare_with_deadline(
-        &mut self,
-        prep: PrepareWithDeadline<T>,
-        _from: NodeId,
-    ) {
+    pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
         if prep.deadline > self.last_released_deadline {
             self.early_buffer.push(Reverse(prep));
         } else {
@@ -339,35 +334,40 @@ where
     }
 
     pub(crate) fn process_early_buffer(&mut self) {
-        while let Some(Reverse(prep)) = self.early_buffer.peek() {
+        while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
             // TODO: check against clock simulator if deadline has passed
             if prep.deadline < 0 {
                 self.early_buffer.pop();
-                // TODO: append to log, get back an index (need to add append function that doesn't increment accepted_idx, could use a boolean param for this)
-                let index = 0; // placeholder
                 self.last_released_deadline = prep.deadline;
 
-                // TODO: what do we do here? Are we planning that all replicas send their reply to the leader, or does
-                // everyone send their reply back to the replica who originally got the client request and broadcasted it?
-                if self.state.0 == Role::Leader {
+                // Append entry without incrementing accepted_idx
+                let inserted_index = self
+                    .internal_storage
+                    .append_entries_without_batching(vec![prep.entry.clone()], false)
+                    .expect(WRITE_ERROR_MSG);
+
+                let freply = FastReply {
+                    request_id: prep.request_id,
+                    log_hash: self
+                        .internal_storage
+                        .get_hash(inserted_index)
+                        .expect(READ_ERROR_MSG),
+                    n: self.internal_storage.get_promise(),
+                };
+
+                // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
+                // of replies for this request
+                if prep.from == self.pid {
                     self.reply_set
                         .entry(prep.request_id)
                         .or_insert_with(HashMap::new)
-                        .insert(
-                            self.pid,
-                            NezhaReply::Fast(FastReply {
-                                request_id: prep.request_id,
-                                log_hash: 0, // placeholder
-                                // log_hash: self.internal_storage.get_hash(index),
-                                n: self.internal_storage.get_promise(),
-                            }),
-                        );
+                        .insert(self.pid, NezhaReply::Fast(freply));
                 } else {
-                    // push FastReply message to outgoing buffer to be sent to leader
+                    // Otherwise, add FastReply to outgoing buffer to be sent to original receiver of this entry
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                         from: self.pid,
-                        to: self.get_current_leader(),
-                        msg: PaxosMsg::FastReply(FastReply {}),
+                        to: prep.from,
+                        msg: PaxosMsg::FastReply(freply),
                     }));
                 }
             } else {
@@ -389,13 +389,14 @@ where
 
         let request_id = freply.request_id;
         self.reply_set
-            .entry(freply.request_id)
+            .entry(request_id)
             .or_insert_with(HashMap::new)
             .insert(from, NezhaReply::Fast(freply));
 
-        let committed_reply = self.check_committed(request_id);
-        if committed_reply {
-            // TODO: advance decided_idx to log index of this committed request
+        let is_committed = self.check_committed(request_id);
+        if is_committed {
+            self.committed.insert(request_id, true);
+            self.reply_set.remove(&request_id);
         }
     }
 
@@ -448,16 +449,6 @@ where
         }
     }
 
-    fn try_advance_decided_idx(&mut self) {
-        let mut next = self.internal_storage.get_decided_idx() + 1;
-        while self.fast_committed.remove(&next) {
-            next += 1;
-        }
-        if next - 1 > self.internal_storage.get_decided_idx() {
-            self.internal_storage.set_decided_idx(next - 1);
-        }
-    }
-
     /// Propose a reconfiguration. Returns an error if already stopped or `new_config` is invalid.
     /// `new_config` defines the cluster-wide configuration settings for the next cluster.
     /// `metadata` is optional data to commit alongside the reconfiguration.
@@ -505,14 +496,35 @@ where
         }));
     }
 
-    fn propose_entry(&mut self, entry: T) {
-        // TODO: add deadline to entry
-        // broadcast message
+    fn propose_entry(&mut self, mut entry: T) {
+        // TODO: add deadline using clock simulator
+        entry.set_deadline(0);
+        entry.set_request_id(RequestId::new_v4());
 
         match self.state {
+            // While undergoing leader change, fall back to normal OmniPaxos paths
             (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
-            _ => self.forward_proposals(vec![entry]),
+            (Role::Follower, Phase::Prepare) => self.forward_proposals(vec![entry]),
+
+            // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
+            _ => {
+                let prep = PrepareWithDeadline {
+                    request_id: entry.get_request_id(),
+                    from: self.pid,
+                    entry: entry.clone(),
+                    sent: 0, // TODO: add current time from clock simulator
+                    deadline: entry.get_deadline(),
+                };
+
+                for peer_pid in &self.peers {
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: *peer_pid,
+                        msg: PaxosMsg::PrepareWithDeadline(prep.clone()),
+                    }));
+                }
+                self.handle_prepare_with_deadline(prep)
+            }
         }
     }
 

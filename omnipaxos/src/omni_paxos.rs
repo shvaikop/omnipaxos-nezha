@@ -385,6 +385,7 @@ where
         }
     }
 
+    /// Trigger processing of Nezha early buffer
     pub fn process_early_buffer(&mut self) {
         self.seq_paxos.process_early_buffer();
     }
