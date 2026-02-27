@@ -690,4 +690,52 @@ mod tests {
         leader_state.set_accepted_idx(5, 2);
         assert_eq!(leader_state.get_commit_idx(), 12);
     }
+
+    /// Helper: given a quorum, the expected super-quorum threshold, and a
+    /// few values below/at/above that threshold, assert correctness.
+    fn assert_super_quorum(quorum: Quorum, expected_threshold: usize, max_nodes: usize) {
+        for n in 0..expected_threshold {
+            assert!(
+                !quorum.is_super_quorum(n),
+                "expected is_super_quorum({n}) = false for threshold {expected_threshold}"
+            );
+        }
+        for n in expected_threshold..=max_nodes {
+            assert!(
+                quorum.is_super_quorum(n),
+                "expected is_super_quorum({n}) = true for threshold {expected_threshold}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_super_quorum_majority() {
+        // (majority, expected super-quorum size, total nodes to check up to)
+        // super_quorum = ceil(f/2) + f + 1 where f = majority - 1
+        let cases: Vec<(usize, usize, usize)> = vec![
+            (2, 3, 3), // 3 nodes:  f=1, super=3
+            (3, 4, 5), // 5 nodes:  f=2, super=4
+            (4, 6, 7), // 7 nodes:  f=3, super=6
+            (5, 7, 9), // 9 nodes:  f=4, super=7
+        ];
+        for (majority, threshold, total) in cases {
+            assert_super_quorum(Quorum::Majority(majority), threshold, total);
+        }
+    }
+
+    #[test]
+    fn is_super_quorum_flexible() {
+        // (write_quorum_size, expected super-quorum threshold, max_nodes to check)
+        let cases: Vec<(usize, usize, usize)> = vec![
+            (2, 3, 5), // f=1, (1+1)/2+1+1 = 3
+            (4, 6, 7), // f=3, (3+1)/2+3+1 = 6
+        ];
+        for (wq, threshold, max_n) in cases {
+            let quorum = Quorum::Flexible(FlexibleQuorum {
+                read_quorum_size: 1, // not relevant for super quorum
+                write_quorum_size: wq,
+            });
+            assert_super_quorum(quorum, threshold, max_n);
+        }
+    }
 }

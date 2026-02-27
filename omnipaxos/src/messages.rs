@@ -233,6 +233,7 @@ pub mod sequence_paxos {
     #[derive(Clone, Debug)]
     pub(crate) enum NezhaReply {
         Fast(FastReply),
+        #[allow(dead_code)]
         Slow(SlowReply),
     }
 

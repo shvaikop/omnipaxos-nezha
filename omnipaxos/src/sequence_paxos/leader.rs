@@ -111,6 +111,7 @@ where
         }));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
         let accepted_metadata = self
             .internal_storage
