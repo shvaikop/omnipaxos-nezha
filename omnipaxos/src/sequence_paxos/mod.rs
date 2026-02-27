@@ -48,7 +48,7 @@ where
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
-    reply_set: HashMap<RequestId, HashMap<NodeId, NezhaReply>>,
+    reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<NodeId>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional Leader NodeId that sent FastReply)>
     committed: HashMap<RequestId, bool>,
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -326,19 +326,23 @@ where
     }
 
     pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
-        if prep.deadline > self.last_released_deadline {
+        if prep.entry.get_deadline() > self.last_released_deadline {
             self.early_buffer.push(Reverse(prep));
         } else {
-            self.late_buffer.insert(prep.request_id, prep);
+            self.late_buffer.insert(prep.entry.get_request_id(), prep);
         }
     }
 
     pub(crate) fn process_early_buffer(&mut self) {
+        // If not in Accept phase, don't process early buffer
+        if self.state.1 != Phase::Accept {
+            return;
+        }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
             // TODO: check against clock simulator if deadline has passed
-            if prep.deadline < 0 {
+            if prep.entry.get_deadline() < 0 {
                 self.early_buffer.pop();
-                self.last_released_deadline = prep.deadline;
+                self.last_released_deadline = prep.entry.get_deadline();
 
                 // Append entry without incrementing accepted_idx
                 let inserted_index = self
@@ -347,21 +351,19 @@ where
                     .expect(WRITE_ERROR_MSG);
 
                 let freply = FastReply {
-                    request_id: prep.request_id,
+                    request_id: prep.entry.get_request_id(),
                     log_hash: self
                         .internal_storage
                         .get_hash(inserted_index)
                         .expect(READ_ERROR_MSG),
                     n: self.internal_storage.get_promise(),
+                    is_leader: self.state.0 == Role::Leader,
                 };
 
                 // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
                 // of replies for this request
                 if prep.from == self.pid {
-                    self.reply_set
-                        .entry(prep.request_id)
-                        .or_insert_with(HashMap::new)
-                        .insert(self.pid, NezhaReply::Fast(freply));
+                    self.handle_fast_reply(freply, self.pid);
                 } else {
                     // Otherwise, add FastReply to outgoing buffer to be sent to original receiver of this entry
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
@@ -377,21 +379,26 @@ where
     }
 
     pub(crate) fn handle_fast_reply(&mut self, freply: FastReply, from: NodeId) {
-        // If reply is from a previous ballot or if we have already received a reply from this node for this request, ignore
-        if freply.n < self.internal_storage.get_promise()
+        // If phase is not Accept, or reply is from a previous ballot, or if we have already received a reply from this node for this request, ignore
+        if self.state.1 != Phase::Accept
+            || freply.n < self.internal_storage.get_promise()
             || self
                 .reply_set
                 .get(&freply.request_id)
-                .map_or(false, |m| m.contains_key(&from))
+                .map_or(false, |(replies, _)| replies.contains_key(&from))
         {
             return;
         }
 
         let request_id = freply.request_id;
-        self.reply_set
+        let entry = self
+            .reply_set
             .entry(request_id)
-            .or_insert_with(HashMap::new)
-            .insert(from, NezhaReply::Fast(freply));
+            .or_insert_with(|| (HashMap::new(), None));
+        if freply.is_leader {
+            entry.1 = Some(from);
+        }
+        entry.0.insert(from, NezhaReply::Fast(freply));
 
         let is_committed = self.check_committed(request_id);
         if is_committed {
@@ -401,14 +408,17 @@ where
     }
 
     fn check_committed(&self, request_id: RequestId) -> bool {
-        // Get replies mapping for this request id: Map<NodeId, NezhaReply>
-        let replies = match self.reply_set.get(&request_id) {
-            Some(replies) => replies,
+        // Get replies mapping for this request id
+        let (replies, leader_pid_opt) = match self.reply_set.get(&request_id) {
+            Some((replies, leader_pid_opt)) => (replies, leader_pid_opt),
             None => return false,
         };
 
-        // Get leader's reply for this request id (always a FastReply)
-        let leader_pid = self.internal_storage.get_promise().pid;
+        // Get leader's reply if it exists (it is always a FastReply), otherwise return false as leader's reply is necessary to determine if request is committed
+        let leader_pid = match leader_pid_opt {
+            Some(pid) => *pid,
+            None => return false,
+        };
         let leader_reply = match replies.get(&leader_pid) {
             Some(NezhaReply::Fast(f)) => f,
             _ => return false,
@@ -424,6 +434,7 @@ where
                     slow_reply_num += 1;
                     fast_reply_num += 1;
                 }
+                // Fast reply only counts if it has the same log hash as the leader
                 NezhaReply::Fast(f) if f.log_hash == leader_reply.log_hash => {
                     fast_reply_num += 1;
                 }
@@ -509,11 +520,9 @@ where
             // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
             _ => {
                 let prep = PrepareWithDeadline {
-                    request_id: entry.get_request_id(),
                     from: self.pid,
                     entry: entry.clone(),
                     sent: 0, // TODO: add current time from clock simulator
-                    deadline: entry.get_deadline(),
                 };
 
                 for peer_pid in &self.peers {
