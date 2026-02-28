@@ -247,6 +247,16 @@ pub mod sequence_paxos {
         pub sync_point: usize,
     }
 
+    /// Periodically send from leader to the followers, reporting the leader's commit point
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct CommitStatus {
+        /// The current round.
+        pub n: Ballot,
+        /// Highest log index that the leader has committed
+        pub commit_point: usize,
+    }
+
     /// Broadcast by the leader so followers can adjust their log entry at log_id.
     /// Includes multiple LogModifications from followers sync_point
     #[derive(Clone, Debug)]
@@ -304,6 +314,7 @@ pub mod sequence_paxos {
         FastReply(FastReply),
         SlowReply(SlowReply),
         LogStatus(LogStatus),
+        CommitStatus(CommitStatus),
         LogModifications(LogModifications<T>),
     }
 
