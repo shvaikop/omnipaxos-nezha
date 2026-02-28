@@ -485,6 +485,7 @@ where
                         self.logger,
                         "Updated decided index from {} to {}", old_decided_idx, new_decided_idx
                     );
+                    self.send_commit_status();
                 }
                 Err(_e) => {
                     #[cfg(feature = "logging")]
