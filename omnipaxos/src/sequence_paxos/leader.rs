@@ -19,6 +19,14 @@ where
         }
 
         // Leader has changed, all previous Nezha fast-path state is stale.
+        #[cfg(feature = "logging")]
+        if !self.reply_set.is_empty() {
+            debug!(
+                self.logger,
+                "Leader change: clearing {} pending Nezha reply sets",
+                self.reply_set.len()
+            );
+        }
         self.reply_set.clear();
         #[cfg(feature = "logging")]
         debug!(self.logger, "Newly elected leader: {:?}", n);

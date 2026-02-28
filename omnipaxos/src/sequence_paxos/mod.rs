@@ -327,8 +327,12 @@ where
 
     pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
         if prep.entry.get_deadline() > self.last_released_deadline {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "PrepareWithDeadline buffered in early_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
             self.early_buffer.push(Reverse(prep));
         } else {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "PrepareWithDeadline buffered in late_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
             self.late_buffer.insert(prep.entry.get_request_id(), prep);
         }
     }
@@ -341,7 +345,7 @@ where
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
             // TODO: check against clock simulator if deadline has passed
             #[allow(unused_comparisons)]
-            if prep.entry.get_deadline() < 0 {
+            if prep.entry.get_deadline() < 1 {
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
@@ -360,6 +364,9 @@ where
                     n: self.internal_storage.get_promise(),
                     is_leader: self.state.0 == Role::Leader,
                 };
+
+                #[cfg(feature = "logging")]
+                debug!(self.logger, "Processed entry from early_buffer"; "request_id" => ?prep.entry.get_request_id(), "inserted_index" => inserted_index, "is_leader" => self.state.0 == Role::Leader);
 
                 // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
                 // of replies for this request
@@ -386,8 +393,10 @@ where
             || self
                 .reply_set
                 .get(&freply.request_id)
-                .map_or(false, |(replies, _)| replies.contains_key(&from))
+                .is_some_and(|(replies, _)| replies.contains_key(&from))
         {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "Ignoring FastReply"; "from" => from, "request_id" => ?freply.request_id, "ballot" => ?freply.n);
             return;
         }
 
@@ -400,9 +409,13 @@ where
             entry.1 = Some(from);
         }
         entry.0.insert(from, NezhaReply::Fast(freply));
+        #[cfg(feature = "logging")]
+        trace!(self.logger, "FastReply recorded"; "from" => from, "request_id" => ?request_id, "is_leader" => entry.1.is_some());
 
         let is_committed = self.check_committed(request_id);
         if is_committed {
+            #[cfg(feature = "logging")]
+            debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
             self.reply_set.remove(&request_id);
         }
@@ -444,10 +457,11 @@ where
         }
 
         // Request is committed if it has either a super quorum of fast replies or an accept quorum of slow replies
-        if self.leader_state.quorum.is_super_quorum(fast_reply_num)
-            || self.leader_state.quorum.is_accept_quorum(slow_reply_num)
-        {
-            #[cfg(feature = "logging")]
+        let committed = self.leader_state.quorum.is_super_quorum(fast_reply_num)
+            || self.leader_state.quorum.is_accept_quorum(slow_reply_num);
+
+        #[cfg(feature = "logging")]
+        if committed {
             debug!(
                 self.logger,
                 "Request {:?} is committed with {} fast replies and {} slow replies",
@@ -455,10 +469,9 @@ where
                 fast_reply_num,
                 slow_reply_num
             );
-            true
-        } else {
-            false
         }
+
+        committed
     }
 
     /// Propose a reconfiguration. Returns an error if already stopped or `new_config` is invalid.
