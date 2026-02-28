@@ -406,7 +406,7 @@ where
     }
 
     pub(crate) fn handle_commit_status(&mut self, cs: CommitStatus) {
-        if self.state.0 != Role::Follower {
+        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
             return;
         }
         // if message belongs to wrong ballot then ignore it
@@ -432,15 +432,26 @@ where
             return;
         }
 
-        // update the follower's commit point to the leader's commit point
-        match self.internal_storage.set_decided_idx(cs.commit_point) {
+        let curr_accepted_idx = self.internal_storage.get_accepted_idx(); 
+        if curr_accepted_idx < cs.commit_point {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "The leader's commit point {} is ahead of the follower's accepted index {}.",
+                cs.commit_point, curr_accepted_idx;
+            );
+        }
+        
+        // make sure decided_idx is not higher than accepted_idx
+        let new_decided_idx = cs.commit_point.min(curr_accepted_idx);
+        match self.internal_storage.set_decided_idx(new_decided_idx) {
             Ok(()) => {
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "Updated commit point from {} to {} based on CommitStatus from leader",
+                    "Updated commit point from {} to {}",
                     old_decided_idx,
-                    cs.commit_point,
+                    new_decided_idx,
                 );
             }
             Err(_e) => {
@@ -449,7 +460,7 @@ where
                     self.logger,
                     "Failed to update commit point from CommitStatus";
                     "old_decided_idx" => old_decided_idx,
-                    "new_decided_idx" => cs.commit_point,
+                    "new_decided_idx" => new_decided_idx,
                     "error" => _e.to_string()
                 );
             }
