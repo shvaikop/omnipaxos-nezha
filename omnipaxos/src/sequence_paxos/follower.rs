@@ -290,21 +290,22 @@ where
     }
 
     pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
-        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
+        if !self.check_valid_ballot(lm.n) {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Ignoring LogModifications message from ballot: {:?}, current ballot: {:?}",
+                lm.n,
+                self.internal_storage.get_promise()
+            );
+            return;
+        }
+        if self.state != (Role::Follower, Phase::Accept) {
             #[cfg(feature = "logging")]
             debug!(self.logger, "Not handling LogModifications message"; "from" => self.pid);
             return;
         }
-        if lm.n != self.leader_state.n_leader {
-            #[cfg(feature = "logging")]
-            info!(
-                self.logger,
-                "Ignoring LogModifications message from ballot: {:?}, current balot: {:?}",
-                lm.n,
-                self.leader_state.n_leader
-            );
-            return;
-        }
+
         if let Some(first_modification) = lm.modifications.first() {
             if first_modification.log_id != self.internal_storage.get_accepted_idx() {
                 #[cfg(feature = "logging")]
@@ -378,7 +379,7 @@ where
     }
 
     pub(crate) fn send_log_status(&mut self) {
-        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
+        if self.state != (Role::Follower, Phase::Accept) {
             #[cfg(feature = "logging")]
             debug!(
                 self.logger,
@@ -406,18 +407,19 @@ where
     }
 
     pub(crate) fn handle_commit_status(&mut self, cs: CommitStatus) {
-        if self.state.0 != Role::Follower || self.state.1 != Phase::Accept {
-            return;
-        }
-        // if message belongs to wrong ballot then ignore it
-        if cs.n != self.leader_state.n_leader {
+        if !self.check_valid_ballot(cs.n) {
             #[cfg(feature = "logging")]
             info!(
                 self.logger,
-                "Ignoring CommitStatus message from ballot: {:?}, current balot: {:?}",
+                "Ignoring CommitStatus message from ballot: {:?}, current ballot: {:?}",
                 cs.n,
-                self.leader_state.n_leader
+                self.internal_storage.get_promise()
             );
+            return;
+        }
+        if self.state != (Role::Follower, Phase::Accept) {
+            #[cfg(feature = "logging")]
+            debug!(self.logger, "Not handling CommitStatus message"; "from" => self.pid);
             return;
         }
 
@@ -432,7 +434,7 @@ where
             return;
         }
 
-        let curr_accepted_idx = self.internal_storage.get_accepted_idx(); 
+        let curr_accepted_idx = self.internal_storage.get_accepted_idx();
         if curr_accepted_idx < cs.commit_point {
             #[cfg(feature = "logging")]
             info!(
@@ -441,7 +443,7 @@ where
                 cs.commit_point, curr_accepted_idx;
             );
         }
-        
+
         // make sure decided_idx is not higher than accepted_idx
         let new_decided_idx = cs.commit_point.min(curr_accepted_idx);
         match self.internal_storage.set_decided_idx(new_decided_idx) {
@@ -449,9 +451,7 @@ where
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "Updated commit point from {} to {}",
-                    old_decided_idx,
-                    new_decided_idx,
+                    "Updated commit point from {} to {}", old_decided_idx, new_decided_idx,
                 );
             }
             Err(_e) => {

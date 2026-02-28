@@ -459,7 +459,9 @@ where
     }
 
     pub(crate) fn handle_log_status(&mut self, log_status: LogStatus, from: NodeId) {
-        if self.state.0 != Role::Leader {
+        if self.state != (Role::Leader, Phase::Accept) {
+            #[cfg(feature = "logging")]
+            info!(self.logger, "Not handling LogStatus message");
             return;
         }
         // If message belongs to wrong ballot then ignore it
@@ -502,7 +504,7 @@ where
     }
 
     pub(crate) fn send_commit_status(&mut self) {
-        if self.state.0 != Role::Leader || self.state.1 != Phase::Accept {
+        if self.state != (Role::Leader, Phase::Accept) {
             #[cfg(feature = "logging")]
             debug!(
                 self.logger,
