@@ -461,7 +461,7 @@ where
     pub(crate) fn handle_log_status(&mut self, log_status: LogStatus, from: NodeId) {
         if self.state != (Role::Leader, Phase::Accept) {
             #[cfg(feature = "logging")]
-            info!(self.logger, "Not handling LogStatus message",);
+            info!(self.logger, "Not handling LogStatus message");
             return;
         }
         // If message belongs to wrong ballot then ignore it

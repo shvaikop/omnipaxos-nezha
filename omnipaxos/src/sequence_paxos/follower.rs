@@ -294,7 +294,7 @@ where
             #[cfg(feature = "logging")]
             info!(
                 self.logger,
-                "Ignoring LogModifications message from ballot: {:?}, current balot: {:?}",
+                "Ignoring LogModifications message from ballot: {:?}, current ballot: {:?}",
                 lm.n,
                 self.internal_storage.get_promise()
             );
@@ -411,7 +411,7 @@ where
             #[cfg(feature = "logging")]
             info!(
                 self.logger,
-                "Ignoring CommitStatus message from ballot: {:?}, current balot: {:?}",
+                "Ignoring CommitStatus message from ballot: {:?}, current ballot: {:?}",
                 cs.n,
                 self.internal_storage.get_promise()
             );
