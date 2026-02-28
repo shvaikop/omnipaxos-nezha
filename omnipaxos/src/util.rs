@@ -510,7 +510,7 @@ impl Quorum {
             Quorum::Majority(majority) => majority - 1,
             Quorum::Flexible(flex_quorum) => flex_quorum.write_quorum_size - 1,
         };
-        let super_quorum_size = (f + 1) / 2 + f + 1; // ceil(f/2) + f + 1
+        let super_quorum_size = f + (f).div_ceil(2) + 1; // f + ceil(f/2) + 1
         num_nodes >= super_quorum_size
     }
 
