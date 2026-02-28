@@ -25,7 +25,7 @@ impl Entry for TestEntry {
         omnipaxos::messages::RequestId::new_v4()
     }
 
-    fn set_request_id(&mut self, request_id: omnipaxos::messages::RequestId) {
+    fn set_request_id(&mut self, _request_id: omnipaxos::messages::RequestId) {
         // no-op for testing
     }
 }

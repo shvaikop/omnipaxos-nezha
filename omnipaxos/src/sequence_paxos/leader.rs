@@ -17,6 +17,17 @@ where
         if n <= self.leader_state.n_leader || n <= self.internal_storage.get_promise() {
             return;
         }
+
+        // Leader has changed, all previous Nezha fast-path state is stale.
+        #[cfg(feature = "logging")]
+        if !self.reply_set.is_empty() {
+            debug!(
+                self.logger,
+                "Leader change: clearing {} pending Nezha reply sets",
+                self.reply_set.len()
+            );
+        }
+        self.reply_set.clear();
         #[cfg(feature = "logging")]
         debug!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
@@ -108,6 +119,7 @@ where
         }));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
         let accepted_metadata = self
             .internal_storage
@@ -266,7 +278,7 @@ where
                 let entries = std::mem::take(&mut self.buffered_proposals);
                 new_accepted_idx = self
                     .internal_storage
-                    .append_entries_without_batching(entries)
+                    .append_entries_without_batching(entries, true)
                     .expect(WRITE_ERROR_MSG);
             }
             if let Some(ss) = self.buffered_stopsign.take() {

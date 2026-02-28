@@ -1,4 +1,3 @@
-use crate::nezha_proxy::NezhaProxy;
 use crate::{
     ballot_leader_election::{Ballot, BallotLeaderElection},
     errors::{valid_config, ConfigError},
@@ -77,7 +76,6 @@ impl OmniPaxosConfig {
             ),
             flush_batch_clock: LogicalClock::with(self.server_config.flush_batch_tick_timeout),
             seq_paxos: SequencePaxos::with(self.clone().into(), storage),
-            nezha_proxy: NezhaProxy::with(self.into()),
         })
     }
 }
@@ -234,7 +232,6 @@ where
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
     flush_batch_clock: LogicalClock,
-    nezha_proxy: NezhaProxy,
 }
 
 impl<T, B> OmniPaxos<T, B>
@@ -263,7 +260,7 @@ where
 
     /// Return the decided index. 0 means that no entry has been decided.
     pub fn get_decided_idx(&self) -> usize {
-        self.nezha_proxy.get_decided_idx(&self.seq_paxos)
+        self.seq_paxos.get_decided_idx()
     }
 
     /// Return trim index from storage.
@@ -345,7 +342,7 @@ where
 
     /// Append an entry to the replicated log.
     pub fn append(&mut self, entry: T) -> Result<(), ProposeErr<T>> {
-        self.nezha_proxy.append(&mut self.seq_paxos, entry)
+        self.seq_paxos.append(entry)
     }
 
     /// Propose a cluster reconfiguration. Returns an error if the current configuration has already been stopped
@@ -386,6 +383,11 @@ where
         if self.flush_batch_clock.tick_and_check_timeout() {
             self.seq_paxos.flush_batch_timeout();
         }
+    }
+
+    /// Trigger processing of Nezha early buffer
+    pub fn process_early_buffer(&mut self) {
+        self.seq_paxos.process_early_buffer();
     }
 
     /// Manually attempt to become the leader by incrementing this instance's Ballot. Calling this

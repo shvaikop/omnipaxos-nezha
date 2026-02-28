@@ -15,7 +15,7 @@ pub type RequestId = uuid::Uuid;
 pub mod sequence_paxos {
     use crate::{
         ballot_leader_election::Ballot,
-        storage::{Entry, StopSign},
+        storage::{Entry, LogHash, StopSign},
         util::{LogSync, NodeId, SequenceNumber},
     };
     #[cfg(feature = "serde")]
@@ -168,14 +168,12 @@ pub mod sequence_paxos {
     where
         T: Entry,
     {
-        /// The id of the client request
-        pub request_id: RequestId,
+        /// The node that originally received this entry from the client
+        pub from: NodeId,
         /// The entry to be proposed for replication
         pub entry: T,
         /// The timestamp when the message is sent
         pub sent: Timestamp,
-        /// The deadline timestap when the message should be processed
-        pub deadline: Timestamp,
     }
 
     /// Implement ordering traits for PrepareWithDeadline so it can be stored in a BinaryHeap for the early_buffer, ordered by deadline
@@ -183,16 +181,22 @@ pub mod sequence_paxos {
 
     impl<T: Entry> PartialEq for PrepareWithDeadline<T> {
         fn eq(&self, other: &Self) -> bool {
-            self.request_id == other.request_id && self.deadline == other.deadline
+            self.entry.get_request_id() == other.entry.get_request_id()
+                && self.entry.get_deadline() == other.entry.get_deadline()
         }
     }
 
     impl<T: Entry> Ord for PrepareWithDeadline<T> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             // compare first by deadline, breaking ties by request_id when required
-            self.deadline
-                .cmp(&other.deadline)
-                .then_with(|| self.request_id.cmp(&other.request_id))
+            self.entry
+                .get_deadline()
+                .cmp(&other.entry.get_deadline())
+                .then_with(|| {
+                    self.entry
+                        .get_request_id()
+                        .cmp(&other.entry.get_request_id())
+                })
         }
     }
 
@@ -211,7 +215,9 @@ pub mod sequence_paxos {
         /// The id of the client request
         pub request_id: RequestId,
         /// Hash of all replicas logs
-        pub log_hash: u64,
+        pub log_hash: LogHash,
+        /// The reply was sent by the leader
+        pub is_leader: bool,
     }
 
     /// Slow path reply from both leaders and followers to proxy
@@ -222,6 +228,13 @@ pub mod sequence_paxos {
         pub n: Ballot,
         /// The id of the client request
         pub request_id: RequestId,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) enum NezhaReply {
+        Fast(FastReply),
+        #[allow(dead_code)]
+        Slow(SlowReply),
     }
 
     /// Periodically send from followers to the leader, reporting the follwer's sync-point

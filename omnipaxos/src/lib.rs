@@ -29,7 +29,6 @@ pub mod storage;
 #[cfg(test)]
 pub(crate) mod test_storage;
 
-mod nezha_proxy;
 #[cfg(feature = "unicache")]
 /// Traits, structs, and types related to the unicache.
 pub mod unicache;

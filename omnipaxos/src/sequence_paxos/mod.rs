@@ -48,9 +48,8 @@ where
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
-    sync_point: usize,
-    #[allow(dead_code)]
-    commit_point: usize,
+    reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<NodeId>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional Leader NodeId that sent FastReply)>
+    committed: HashMap<RequestId, bool>,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -112,8 +111,8 @@ where
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: HashMap::new(),
-            sync_point: 0,
-            commit_point: 0,
+            reply_set: HashMap::new(),
+            committed: HashMap::new(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -295,8 +294,8 @@ where
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
-            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep, m.from),
-            PaxosMsg::FastReply(_freply) => todo!(),
+            PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep),
+            PaxosMsg::FastReply(freply) => self.handle_fast_reply(freply, m.from),
             PaxosMsg::SlowReply(_sreply) => todo!(),
             PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
             PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
@@ -326,16 +325,153 @@ where
         }
     }
 
-    pub(crate) fn handle_prepare_with_deadline(
-        &mut self,
-        prep: PrepareWithDeadline<T>,
-        _from: NodeId,
-    ) {
-        if prep.deadline > self.last_released_deadline {
+    pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
+        if prep.entry.get_deadline() > self.last_released_deadline {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "PrepareWithDeadline buffered in early_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
             self.early_buffer.push(Reverse(prep));
         } else {
-            self.late_buffer.insert(prep.request_id, prep);
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "PrepareWithDeadline buffered in late_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
+            self.late_buffer.insert(prep.entry.get_request_id(), prep);
         }
+    }
+
+    pub(crate) fn process_early_buffer(&mut self) {
+        // If not in Accept phase, don't process early buffer
+        if self.state.1 != Phase::Accept {
+            return;
+        }
+        while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
+            // TODO: check against clock simulator if deadline has passed
+            #[allow(unused_comparisons)]
+            if prep.entry.get_deadline() < 1 {
+                self.early_buffer.pop();
+                self.last_released_deadline = prep.entry.get_deadline();
+
+                // Append entry without incrementing accepted_idx
+                let inserted_index = self
+                    .internal_storage
+                    .append_entries_without_batching(vec![prep.entry.clone()], false)
+                    .expect(WRITE_ERROR_MSG);
+
+                let freply = FastReply {
+                    request_id: prep.entry.get_request_id(),
+                    log_hash: self
+                        .internal_storage
+                        .get_hash(inserted_index)
+                        .expect(READ_ERROR_MSG),
+                    n: self.internal_storage.get_promise(),
+                    is_leader: self.state.0 == Role::Leader,
+                };
+
+                #[cfg(feature = "logging")]
+                debug!(self.logger, "Processed entry from early_buffer"; "request_id" => ?prep.entry.get_request_id(), "inserted_index" => inserted_index, "is_leader" => self.state.0 == Role::Leader);
+
+                // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
+                // of replies for this request
+                if prep.from == self.pid {
+                    self.handle_fast_reply(freply, self.pid);
+                } else {
+                    // Otherwise, add FastReply to outgoing buffer to be sent to original receiver of this entry
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: prep.from,
+                        msg: PaxosMsg::FastReply(freply),
+                    }));
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn handle_fast_reply(&mut self, freply: FastReply, from: NodeId) {
+        // If phase is not Accept, or reply is from a previous ballot, or if we have already received a reply from this node for this request, ignore
+        if self.state.1 != Phase::Accept
+            || freply.n < self.internal_storage.get_promise()
+            || self
+                .reply_set
+                .get(&freply.request_id)
+                .is_some_and(|(replies, _)| replies.contains_key(&from))
+        {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "Ignoring FastReply"; "from" => from, "request_id" => ?freply.request_id, "ballot" => ?freply.n);
+            return;
+        }
+
+        let request_id = freply.request_id;
+        let entry = self
+            .reply_set
+            .entry(request_id)
+            .or_insert_with(|| (HashMap::new(), None));
+        if freply.is_leader {
+            entry.1 = Some(from);
+        }
+        entry.0.insert(from, NezhaReply::Fast(freply));
+        #[cfg(feature = "logging")]
+        trace!(self.logger, "FastReply recorded"; "from" => from, "request_id" => ?request_id, "is_leader" => entry.1.is_some());
+
+        let is_committed = self.check_committed(request_id);
+        if is_committed {
+            #[cfg(feature = "logging")]
+            debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
+            self.committed.insert(request_id, true);
+            self.reply_set.remove(&request_id);
+        }
+    }
+
+    fn check_committed(&self, request_id: RequestId) -> bool {
+        // Get replies mapping for this request id
+        let (replies, leader_pid_opt) = match self.reply_set.get(&request_id) {
+            Some((replies, leader_pid_opt)) => (replies, leader_pid_opt),
+            None => return false,
+        };
+
+        // Get leader's reply if it exists (it is always a FastReply), otherwise return false as leader's reply is necessary to determine if request is committed
+        let leader_pid = match leader_pid_opt {
+            Some(pid) => *pid,
+            None => return false,
+        };
+        let leader_reply = match replies.get(&leader_pid) {
+            Some(NezhaReply::Fast(f)) => f,
+            _ => return false,
+        };
+
+        // Count the number of fast and slow replies
+        let mut slow_reply_num = 0;
+        let mut fast_reply_num = 0;
+        for reply in replies.values() {
+            match reply {
+                NezhaReply::Slow(_) => {
+                    // Slow reply counts as a fast reply since follower's log is guaranteed to be up to date with the leader
+                    slow_reply_num += 1;
+                    fast_reply_num += 1;
+                }
+                // Fast reply only counts if it has the same log hash as the leader
+                NezhaReply::Fast(f) if f.log_hash == leader_reply.log_hash => {
+                    fast_reply_num += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // Request is committed if it has either a super quorum of fast replies or an accept quorum of slow replies
+        let committed = self.leader_state.quorum.is_super_quorum(fast_reply_num)
+            || self.leader_state.quorum.is_accept_quorum(slow_reply_num);
+
+        #[cfg(feature = "logging")]
+        if committed {
+            debug!(
+                self.logger,
+                "Request {:?} is committed with {} fast replies and {} slow replies",
+                request_id,
+                fast_reply_num,
+                slow_reply_num
+            );
+        }
+
+        committed
     }
 
     /// Propose a reconfiguration. Returns an error if already stopped or `new_config` is invalid.
@@ -385,11 +521,37 @@ where
         }));
     }
 
-    fn propose_entry(&mut self, entry: T) {
+    fn propose_entry(&mut self, mut entry: T) {
+        // TODO: add deadline using clock simulator
+        entry.set_deadline(0);
+        entry.set_request_id(RequestId::new_v4());
+
         match self.state {
+            // TODO: replace with commented out paths below once clock simulator is implemented
             (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
             (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
             _ => self.forward_proposals(vec![entry]),
+            // While undergoing leader change, fall back to normal OmniPaxos paths
+            // (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+            // (Role::Follower, Phase::Prepare) => self.forward_proposals(vec![entry]),
+
+            // // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
+            // _ => {
+            //     let prep = PrepareWithDeadline {
+            //         from: self.pid,
+            //         entry: entry.clone(),
+            //         sent: 0, // TODO: add current time from clock simulator
+            //     };
+
+            //     for peer_pid in &self.peers {
+            //         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            //             from: self.pid,
+            //             to: *peer_pid,
+            //             msg: PaxosMsg::PrepareWithDeadline(prep.clone()),
+            //         }));
+            //     }
+            //     self.handle_prepare_with_deadline(prep)
+            // }
         }
     }
 
@@ -521,5 +683,536 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             #[cfg(feature = "logging")]
             custom_logger: config.server_config.custom_logger,
         }
+    }
+}
+
+#[cfg(all(test, not(feature = "unicache")))]
+mod tests {
+    use super::*;
+    use crate::ballot_leader_election::Ballot;
+    use crate::messages::sequence_paxos::{FastReply, NezhaReply, PrepareWithDeadline, SlowReply};
+    use crate::messages::RequestId;
+    use crate::storage::{Entry, LogHash, Snapshot};
+    use crate::test_storage::TestStorage;
+    use crate::util::{FlexibleQuorum, WRITE_ERROR_MSG};
+    use crate::{ClusterConfig, OmniPaxosConfig, ServerConfig};
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    // ── Test helpers ──
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct TestEntry {
+        value: u64,
+        request_id: RequestId,
+        deadline: u64,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct TestSnapshot;
+
+    impl Snapshot<TestEntry> for TestSnapshot {
+        fn create(_: &[TestEntry]) -> Self {
+            Self
+        }
+        fn merge(&mut self, _: Self) {}
+        fn use_snapshots() -> bool {
+            false
+        }
+    }
+
+    impl Entry for TestEntry {
+        type Snapshot = TestSnapshot;
+
+        fn stable_encode(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.value.to_le_bytes());
+            out.extend_from_slice(self.request_id.as_bytes());
+            out.extend_from_slice(&self.deadline.to_le_bytes());
+        }
+
+        fn get_deadline(&self) -> u64 {
+            self.deadline
+        }
+
+        fn set_deadline(&mut self, deadline: u64) {
+            self.deadline = deadline;
+        }
+
+        fn get_request_id(&self) -> RequestId {
+            self.request_id
+        }
+
+        fn set_request_id(&mut self, request_id: RequestId) {
+            self.request_id = request_id;
+        }
+    }
+
+    impl TestEntry {
+        fn new(value: u64, request_id: RequestId, deadline: u64) -> Self {
+            Self {
+                value,
+                request_id,
+                deadline,
+            }
+        }
+    }
+
+    /// Create a SequencePaxos instance with the given nodes and this node's pid.
+    /// Sets the instance into (role, phase) state and writes a promise for the given ballot.
+    fn create_paxos(
+        pid: u64,
+        nodes: Vec<u64>,
+        role: Role,
+        phase: Phase,
+    ) -> SequencePaxos<TestEntry, TestStorage<TestEntry>> {
+        let cluster_config = ClusterConfig {
+            configuration_id: 1,
+            nodes,
+            flexible_quorum: None,
+        };
+        let server_config = ServerConfig {
+            pid,
+            ..ServerConfig::default()
+        };
+        let omni_config = OmniPaxosConfig {
+            cluster_config,
+            server_config,
+        };
+        let storage = TestStorage::default();
+        let mut paxos = SequencePaxos::with(omni_config.into(), storage);
+        paxos.state = (role, phase);
+        paxos
+    }
+
+    /// Create a paxos node in Accept phase with a written promise.
+    fn create_accept_paxos(
+        pid: u64,
+        is_leader: bool,
+        nodes: Vec<u64>,
+    ) -> SequencePaxos<TestEntry, TestStorage<TestEntry>> {
+        let role = if is_leader {
+            Role::Leader
+        } else {
+            Role::Follower
+        };
+        let mut paxos = create_paxos(pid, nodes, role, Phase::Accept);
+        let ballot = Ballot::with(1, 1, 1, 5);
+        paxos
+            .internal_storage
+            .set_promise(ballot)
+            .expect(WRITE_ERROR_MSG);
+        paxos
+    }
+
+    #[test]
+    fn prepare_with_deadline_goes_to_early_buffer_when_deadline_above_last_released() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+        let rid = Uuid::new_v4();
+        let entry = TestEntry::new(42, rid, 100);
+        let prep = PrepareWithDeadline {
+            from: 2,
+            entry,
+            sent: 0,
+        };
+
+        paxos.handle_prepare_with_deadline(prep);
+
+        assert_eq!(paxos.early_buffer.len(), 1);
+        assert!(paxos.late_buffer.is_empty());
+    }
+
+    #[test]
+    fn prepare_with_deadline_goes_to_late_buffer_when_deadline_at_or_below_last_released() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+        paxos.last_released_deadline = 50;
+
+        let rid = Uuid::new_v4();
+        let entry = TestEntry::new(42, rid, 30); // deadline < last_released
+        let prep = PrepareWithDeadline {
+            from: 2,
+            entry,
+            sent: 0,
+        };
+
+        paxos.handle_prepare_with_deadline(prep);
+
+        assert!(paxos.early_buffer.is_empty());
+        assert_eq!(paxos.late_buffer.len(), 1);
+        assert!(paxos.late_buffer.contains_key(&rid));
+    }
+
+    #[test]
+    fn prepare_with_deadline_equal_to_last_released_goes_to_late_buffer() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+        paxos.last_released_deadline = 50;
+
+        let rid = Uuid::new_v4();
+        let entry = TestEntry::new(42, rid, 50); // deadline == last_released
+        let prep = PrepareWithDeadline {
+            from: 2,
+            entry,
+            sent: 0,
+        };
+
+        paxos.handle_prepare_with_deadline(prep);
+
+        assert!(paxos.early_buffer.is_empty());
+        assert_eq!(paxos.late_buffer.len(), 1);
+    }
+
+    #[test]
+    fn early_buffer_orders_by_deadline_ascending() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+
+        let rid1 = Uuid::new_v4();
+        let rid2 = Uuid::new_v4();
+        let rid3 = Uuid::new_v4();
+        let prep1 = PrepareWithDeadline {
+            from: 2,
+            entry: TestEntry::new(1, rid1, 300),
+            sent: 0,
+        };
+        let prep2 = PrepareWithDeadline {
+            from: 2,
+            entry: TestEntry::new(2, rid2, 100),
+            sent: 0,
+        };
+        let prep3 = PrepareWithDeadline {
+            from: 2,
+            entry: TestEntry::new(3, rid3, 200),
+            sent: 0,
+        };
+
+        paxos.handle_prepare_with_deadline(prep1);
+        paxos.handle_prepare_with_deadline(prep2);
+        paxos.handle_prepare_with_deadline(prep3);
+
+        assert_eq!(paxos.early_buffer.len(), 3);
+        // BinaryHeap<Reverse<...>> should give smallest deadline first
+        let top = paxos.early_buffer.peek().unwrap().0.entry.get_deadline();
+        assert_eq!(top, 100);
+    }
+
+    #[test]
+    fn process_early_buffer_does_nothing_when_not_in_accept_phase() {
+        let mut paxos = create_paxos(1, vec![1, 2, 3], Role::Follower, Phase::Prepare);
+        let prep = PrepareWithDeadline {
+            from: 2,
+            entry: TestEntry::new(1, Uuid::new_v4(), 0),
+            sent: 0,
+        };
+        paxos.early_buffer.push(Reverse(prep));
+
+        paxos.process_early_buffer();
+
+        // Nothing should be consumed
+        assert_eq!(paxos.early_buffer.len(), 1);
+    }
+
+    #[test]
+    fn fast_reply_accumulates_in_reply_set() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let freply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+        };
+
+        paxos.handle_fast_reply(freply, 2);
+
+        assert!(paxos.reply_set.contains_key(&rid));
+        let (replies, leader_opt) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(replies.contains_key(&2));
+        assert!(leader_opt.is_none()); // is_leader was false, so leader_opt should still be None
+    }
+
+    #[test]
+    fn fast_reply_tracks_leader_pid() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let freply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true, // leader reply
+        };
+
+        paxos.handle_fast_reply(freply, 3);
+
+        let (_, leader_opt) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(*leader_opt, Some(3));
+    }
+
+    #[test]
+    fn fast_reply_ignores_stale_ballot() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        // Use a ballot lower than the current promise (set to 1 in helper function)
+        let stale_ballot = Ballot::default();
+
+        let freply = FastReply {
+            n: stale_ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+        };
+
+        paxos.handle_fast_reply(freply, 2);
+
+        assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn fast_reply_ignores_duplicate_from_same_node() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let freply1 = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+        };
+        let freply2 = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true, // different is_leader to check it's truly ignored
+        };
+
+        paxos.handle_fast_reply(freply1, 2);
+        paxos.handle_fast_reply(freply2, 2); // duplicate from node 2
+
+        let (replies, leader_opt) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        // leader_opt should still be None since the first reply had is_leader=false
+        // and the duplicate was ignored
+        assert!(leader_opt.is_none());
+    }
+
+    #[test]
+    fn fast_reply_ignored_when_not_in_accept_phase() {
+        let mut paxos = create_paxos(1, vec![1, 2, 3, 4, 5], Role::Follower, Phase::Prepare);
+        let ballot = Ballot::with(1, 1, 1, 5);
+        paxos
+            .internal_storage
+            .set_promise(ballot)
+            .expect(WRITE_ERROR_MSG);
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let freply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+        };
+
+        paxos.handle_fast_reply(freply, 2);
+
+        assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn check_committed_returns_false_without_leader_reply() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        // Add replies from followers but none is marked as leader
+        for from in [2, 3, 4, 5] {
+            let freply = FastReply {
+                n: ballot,
+                request_id: rid,
+                log_hash,
+                is_leader: false,
+            };
+            paxos.handle_fast_reply(freply, from);
+        }
+
+        // Should not be committed since no leader reply
+        assert!(!paxos.committed.contains_key(&rid));
+        assert!(paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn check_committed_super_quorum_of_matching_fast_replies() {
+        // 5 nodes: majority = 3, f = 2, super_quorum = ceil(2/2) + 2 + 1 = 4
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        // Leader reply from node 2
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+
+        // Follower replies with matching hash from nodes 3, 4
+        for from in [3, 4] {
+            let freply = FastReply {
+                n: ballot,
+                request_id: rid,
+                log_hash,
+                is_leader: false,
+            };
+            paxos.handle_fast_reply(freply, from);
+        }
+
+        // 3 matching fast replies (nodes 2, 3, 4) + need super quorum of 4- shouldn't be committed yet
+        assert!(!paxos.committed.contains_key(&rid));
+
+        // One more matching fast reply from node 5- 4 matching replies = super quorum
+        let freply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+        };
+        paxos.handle_fast_reply(freply, 5);
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
+        // reply_set should be cleaned up once committed
+        assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn check_committed_mismatched_hash_does_not_count_as_fast() {
+        // 5 nodes: majority = 3, f = 2, super_quorum = 4
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let leader_hash = LogHash::compute(&[TestEntry::new(1, rid, 0)]);
+        let different_hash = LogHash::compute(&[TestEntry::new(99, rid, 0)]);
+
+        // Leader reply
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash: leader_hash,
+            is_leader: true,
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+
+        // Followers 3, 4 send matching hash
+        for from in [3, 4] {
+            let freply = FastReply {
+                n: ballot,
+                request_id: rid,
+                log_hash: leader_hash,
+                is_leader: false,
+            };
+            paxos.handle_fast_reply(freply, from);
+        }
+
+        // Follower 5 sends different hash- should not count towards fast quorum
+        let freply_mismatch = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash: different_hash,
+            is_leader: false,
+        };
+        paxos.handle_fast_reply(freply_mismatch, 5);
+
+        // Only 3 matching fast replies (2, 3, 4) < super quorum of 4- not committed
+        assert!(!paxos.committed.contains_key(&rid));
+    }
+
+    #[test]
+    fn check_committed_returns_false_for_unknown_request_id() {
+        let paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+        let unknown_rid = Uuid::new_v4();
+        assert!(!paxos.check_committed(unknown_rid));
+    }
+
+    #[test]
+    fn leader_change_clears_reply_set() {
+        let mut paxos = create_accept_paxos(1, true, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        // Accumulate some replies
+        let freply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+        };
+        paxos.handle_fast_reply(freply, 1);
+
+        assert!(!paxos.reply_set.is_empty());
+
+        // Simulate a new leader being elected with a higher ballot
+        let new_ballot = Ballot::with(2, 2, 2, 5);
+        paxos.handle_leader(new_ballot);
+
+        // reply_set should be cleared after leader change
+        assert!(paxos.reply_set.is_empty());
+    }
+
+    #[test]
+    fn slow_replies_count_towards_accept_quorum() {
+        // 5 nodes: majority = 3 (accept quorum). Slow replies count for both slow and fast.
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        // Manually populate reply_set with leader FastReply + slow replies
+        let mut replies = HashMap::new();
+        replies.insert(
+            2u64,
+            NezhaReply::Fast(FastReply {
+                n: ballot,
+                request_id: rid,
+                log_hash,
+                is_leader: true,
+            }),
+        );
+        replies.insert(
+            3u64,
+            NezhaReply::Slow(SlowReply {
+                n: ballot,
+                request_id: rid,
+            }),
+        );
+        replies.insert(
+            4u64,
+            NezhaReply::Slow(SlowReply {
+                n: ballot,
+                request_id: rid,
+            }),
+        );
+        replies.insert(
+            5u64,
+            NezhaReply::Slow(SlowReply {
+                n: ballot,
+                request_id: rid,
+            }),
+        );
+        paxos.reply_set.insert(rid, (replies, Some(2)));
+
+        // 3 slow replies >= accept quorum of 3 → should be committed
+        assert!(paxos.check_committed(rid));
     }
 }

@@ -373,7 +373,7 @@ where
     fn append_missing_entries(&mut self, modifications: &[SingleLogModification<T>]) {
         let entries: Vec<T> = modifications.iter().map(|m| m.entry.clone()).collect();
         self.internal_storage
-            .append_entries_without_batching(entries)
+            .append_entries_without_batching(entries, true)
             .expect(WRITE_ERROR_MSG);
     }
 
@@ -496,7 +496,10 @@ mod tests {
         };
         let storage = TestStorage::with_entries(entries);
         let mut paxos = SequencePaxos::with(omni_config.into(), storage);
-        paxos.sync_point = accepted_idx;
+        paxos
+            .internal_storage
+            .set_accepted_idx(accepted_idx)
+            .expect(WRITE_ERROR_MSG);
         paxos
     }
 
@@ -537,7 +540,7 @@ mod tests {
             TestEntry::new(10, request_id_1, 15),
             TestEntry::new(20, request_id_2, 25),
         ];
-        let modifications = build_modifications(paxos.sync_point, updated);
+        let modifications = build_modifications(paxos.internal_storage.get_accepted_idx(), updated);
         let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
         paxos.handle_log_modifications(modifications);
@@ -564,7 +567,10 @@ mod tests {
 
         // create modification with different request id than the entry at accepted_idx
         let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
-        let modifications = build_modifications(paxos.sync_point, vec![replacement.clone()]);
+        let modifications = build_modifications(
+            paxos.internal_storage.get_accepted_idx(),
+            vec![replacement.clone()],
+        );
         let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
         paxos.handle_log_modifications(modifications);
@@ -594,8 +600,12 @@ mod tests {
         let replacement_2 = TestEntry::new(100, Uuid::new_v4(), 35);
 
         let modifications = build_modifications(
-            paxos.sync_point,
-            vec![untouched.clone(), replacement_1.clone(), replacement_2.clone()],
+            paxos.internal_storage.get_accepted_idx(),
+            vec![
+                untouched.clone(),
+                replacement_1.clone(),
+                replacement_2.clone(),
+            ],
         );
         let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
 
@@ -623,7 +633,7 @@ mod tests {
         let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
         let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
         let modifications = build_modifications(
-            paxos.sync_point,
+            paxos.internal_storage.get_accepted_idx(),
             vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
         );
         let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;

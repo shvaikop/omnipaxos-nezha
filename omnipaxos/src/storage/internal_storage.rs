@@ -240,7 +240,8 @@ where
         append_res: Option<Vec<T>>,
     ) -> StorageResult<Option<AcceptedMetaData<T>>> {
         if let Some(flushed_entries) = append_res {
-            let accepted_idx = self.append_entries_without_batching(flushed_entries.clone())?;
+            let accepted_idx =
+                self.append_entries_without_batching(flushed_entries.clone(), true)?;
             Ok(Some(AcceptedMetaData {
                 accepted_idx,
                 #[cfg(not(feature = "unicache"))]
@@ -261,7 +262,7 @@ where
     ) -> StorageResult<Option<usize>> {
         let append_res = self.state_cache.append_entries(entries);
         if let Some(flushed_entries) = append_res {
-            let accepted_idx = self.append_entries_without_batching(flushed_entries)?;
+            let accepted_idx = self.append_entries_without_batching(flushed_entries, true)?;
             Ok(Some(accepted_idx))
         } else {
             Ok(None)
@@ -286,7 +287,7 @@ where
             self.state_cache.batched_processed_by_leader.clear();
         }
         let flushed_entries = self.state_cache.take_batched_entries();
-        self.append_entries_without_batching(flushed_entries)
+        self.append_entries_without_batching(flushed_entries, true)
     }
 
     pub(crate) fn flush_batch_and_get_entries(
@@ -300,15 +301,21 @@ where
         self.flush_if_full_batch(flushed_entries)
     }
 
-    // Append entries without batching, return the accepted index
+    // Append entries without batching, return either the accepted index if increment_accepted_idx is true,
+    // or the index of the last appended entry if increment_accepted_idx is false
     pub(crate) fn append_entries_without_batching(
         &mut self,
         entries: Vec<T>,
+        increment_accepted_idx: bool,
     ) -> StorageResult<usize> {
         let num_new_entries = entries.len();
         self.storage.append_entries(entries)?;
-        self.state_cache.accepted_idx += num_new_entries;
-        Ok(self.state_cache.accepted_idx)
+        if increment_accepted_idx {
+            self.state_cache.accepted_idx += num_new_entries;
+            Ok(self.state_cache.accepted_idx)
+        } else {
+            Ok(self.state_cache.accepted_idx + num_new_entries)
+        }
     }
 
     pub(crate) fn sync_log(
