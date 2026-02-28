@@ -299,6 +299,7 @@ where
             PaxosMsg::SlowReply(_sreply) => todo!(),
             PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
             PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
+            PaxosMsg::CommitStatus(cs) => self.handle_commit_status(cs),
         }
     }
 

@@ -499,4 +499,37 @@ where
             }
         }
     }
+
+    pub(crate) fn send_commit_status(&mut self) {
+        if self.state.0 != Role::Leader || self.state.1 != Phase::Accept {
+            #[cfg(feature = "logging")]
+            debug!(
+                self.logger,
+                "Not sending commit status message";
+                "from" => self.pid
+            );
+            return;
+        }
+
+        let commit_status = CommitStatus {
+            n: self.internal_storage.get_promise(),
+            commit_point: self.internal_storage.get_decided_idx(),
+        };
+        #[cfg(feature = "logging")]
+        debug!(
+            self.logger,
+            "Sending commit status message";
+            "from" => self.pid,
+            "msg" => format!("{:?}", commit_status)
+        );
+
+        // sending the commit status to all promised followers
+        for pid in self.leader_state.get_promised_followers() {
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: pid,
+                msg: PaxosMsg::CommitStatus(commit_status.clone()),
+            }));
+        }
+    }
 }
