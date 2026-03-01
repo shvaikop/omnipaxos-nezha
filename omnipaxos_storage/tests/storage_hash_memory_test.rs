@@ -1,4 +1,5 @@
 use omnipaxos::storage::{Entry, LogHash, NoSnapshot, Storage};
+use omnipaxos::util::NodeId;
 use omnipaxos_storage::memory_storage::MemoryStorage;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +27,14 @@ impl Entry for TestEntry {
     }
 
     fn set_request_id(&mut self, _request_id: omnipaxos::messages::RequestId) {
+        // no-op for testing
+    }
+
+    fn get_nezha_proxy_id(&self) -> NodeId {
+        0
+    }
+
+    fn set_nezha_proxy_id(&mut self, _node_id: NodeId) {
         // no-op for testing
     }
 }

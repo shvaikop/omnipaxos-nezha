@@ -1,10 +1,10 @@
 #![cfg(feature = "persistent_storage")]
 
 use omnipaxos::storage::{Entry, LogHash, NoSnapshot, Storage};
+use omnipaxos::util::NodeId;
 use omnipaxos_storage::persistent_storage::{PersistentStorage, PersistentStorageConfig};
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
-
 // cargo test -p omnipaxos_storage --features persistent_storage --test storage_hash_persistent_test
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +32,14 @@ impl Entry for TestEntry {
     }
 
     fn set_request_id(&mut self, _request_id: omnipaxos::messages::RequestId) {
+        // no-op for testing
+    }
+
+    fn get_nezha_proxy_id(&self) -> NodeId {
+        0
+    }
+
+    fn set_nezha_proxy_id(&mut self, _node_id: NodeId) {
         // no-op for testing
     }
 }

@@ -6,6 +6,7 @@ pub use storage_hash::{EntryHash, LogHash};
 use super::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
 use crate::unicache::*;
+use crate::util::NodeId;
 use crate::{messages::RequestId, ClusterConfig};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,12 @@ pub trait Entry: Clone + Debug {
 
     /// Updates the request identifier metadata stored within the entry.
     fn set_request_id(&mut self, request_id: RequestId);
+
+    /// Returns the NodeId of the node that accepted the Propose from client and is tracking responses for fast/slow path
+    fn get_nezha_proxy_id(&self) -> NodeId;
+
+    /// Sets the NodeId of the node that accepted the Propose from client and is tracking responses for fast/slow path
+    fn set_nezha_proxy_id(&mut self, node_id: NodeId);
 }
 
 /// A StopSign entry that marks the end of a configuration. Used for reconfiguration.

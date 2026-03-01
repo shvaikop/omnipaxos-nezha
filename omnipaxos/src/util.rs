@@ -571,6 +571,14 @@ mod tests {
             fn stable_encode(&self, out: &mut Vec<u8>) {
                 out.push(0)
             }
+
+            fn get_nezha_proxy_id(&self) -> NodeId {
+                0
+            }
+
+            fn set_nezha_proxy_id(&mut self, _node_id: NodeId) {
+                // no-op for testing
+            }
         }
 
         let nodes = vec![6, 7, 8];
