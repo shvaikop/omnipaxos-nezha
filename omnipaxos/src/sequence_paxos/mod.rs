@@ -1077,6 +1077,119 @@ mod tests {
     }
 
     #[test]
+    fn slow_reply_accumulates_in_reply_set() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+
+        let sreply = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply, 2);
+
+        assert!(paxos.reply_set.contains_key(&rid));
+        let (replies, leader_opt) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(replies.get(&2), Some(NezhaReply::Slow(_))));
+        assert!(leader_opt.is_none());
+    }
+
+    #[test]
+    fn slow_reply_ignores_duplicate_from_same_node() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+
+        let sreply1 = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+        let sreply2 = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply1, 2);
+        paxos.handle_slow_reply(sreply2, 2);
+
+        let (replies, _) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(replies.get(&2), Some(NezhaReply::Slow(_))));
+    }
+
+    #[test]
+    fn slow_reply_ignored_when_not_in_accept_phase() {
+        let mut paxos = create_paxos(1, vec![1, 2, 3, 4, 5], Role::Follower, Phase::Prepare);
+        let ballot = Ballot::with(1, 1, 1, 5);
+        paxos
+            .internal_storage
+            .set_promise(ballot)
+            .expect(WRITE_ERROR_MSG);
+        let rid = Uuid::new_v4();
+
+        let sreply = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply, 2);
+
+        assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn slow_reply_commits_once_accept_quorum_is_reached_with_leader_reply_present() {
+        // 5 nodes: majority/accept quorum = 3. Current implementation counts only SlowReply
+        // messages toward the slow-path quorum, so 3 slow replies are needed in addition to
+        // the leader FastReply being present.
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            3,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            4,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            5,
+        );
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
+    }
+
+    #[test]
     fn check_committed_returns_false_without_leader_reply() {
         let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
         let ballot = paxos.internal_storage.get_promise();
