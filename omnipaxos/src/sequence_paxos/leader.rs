@@ -436,7 +436,7 @@ where
 
             let entries = self
                 .internal_storage
-                .get_entries(follower_accepted_idx, leader_accepted_idx + 1)
+                .get_entries(follower_accepted_idx, leader_accepted_idx)
                 .expect(READ_ERROR_MSG);
 
             let modifications: Vec<SingleLogModification<T>> = entries
@@ -445,10 +445,20 @@ where
                 .map(|(offset, entry)| SingleLogModification {
                     request_id: entry.get_request_id(),
                     deadline: entry.get_deadline(),
-                    log_id: follower_accepted_idx + offset + 1,
+                    log_id: follower_accepted_idx + offset,
                     entry: entry.clone(),
                 })
                 .collect();
+
+            #[cfg(feature = "logging")]
+            trace!(
+                self.logger,
+                "Broadcasting LogModifications";
+                "to" => pid,
+                "leader_accepted_idx" => leader_accepted_idx,
+                "follower_accepted_idx" => follower_accepted_idx,
+                "modifications" => format!("{:?}", modifications),
+            );
 
             self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                 from: self.pid,
@@ -475,6 +485,7 @@ where
             );
             return;
         }
+        // if log_status.sync_point is outdated - it is ignored inside the setter
         self.leader_state
             .set_accepted_idx(from, log_status.sync_point);
         let new_decided_idx = self.leader_state.get_commit_idx();

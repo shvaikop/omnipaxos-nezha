@@ -290,6 +290,21 @@ where
     }
 
     pub(crate) fn handle_log_modifications(&mut self, lm: LogModifications<T>) {
+        #[cfg(feature = "logging")]
+        trace!(self.logger, "Received LogModifications"; "msg" => format!("{:?}", lm));
+
+        #[cfg(feature = "logging")]
+        {
+            let accepted_idx = self.internal_storage.get_accepted_idx();
+            let local_log_before = self.internal_storage.get_suffix(0).unwrap_or_default();
+            trace!(
+                self.logger,
+                "Local log before LogModifications";
+                "accepted_idx" => accepted_idx,
+                "log_len" => local_log_before.len(),
+            );
+        }
+
         if !self.check_valid_ballot(lm.n) {
             #[cfg(feature = "logging")]
             info!(
@@ -320,7 +335,7 @@ where
 
         let mut append_start = None;
 
-        for modification in lm.modifications.iter() {
+        for (i, modification) in lm.modifications.iter().enumerate() {
             let local_entry = self
                 .internal_storage
                 .get_entry(modification.log_id)
@@ -333,7 +348,7 @@ where
                 }
                 None => {
                     // no entry at this index, need to append the rest of the modifications
-                    append_start = Some(modification.log_id);
+                    append_start = Some(i);
                     break;
                 }
             }
@@ -345,9 +360,23 @@ where
         }
 
         // update the accepted index to the end of the modifications, which is the new sync point for the leader
-        self.internal_storage
-            .set_accepted_idx(lm.modifications.last().unwrap().log_id)
-            .expect(WRITE_ERROR_MSG);
+        if let Some(end) = lm.modifications.last() {
+            self.internal_storage
+                .set_accepted_idx(end.log_id)
+                .expect(WRITE_ERROR_MSG);
+        }
+
+        #[cfg(feature = "logging")]
+        {
+            let accepted_idx = self.internal_storage.get_accepted_idx();
+            let local_log_after = self.internal_storage.get_suffix(0).unwrap_or_default();
+            trace!(
+                self.logger,
+                "Local log length after LogModifications";
+                "accepted_idx" => accepted_idx,
+                "log_len" => local_log_after.len()
+            );
+        }
     }
 
     fn update_deadline_or_replace_entry(
@@ -705,6 +734,45 @@ mod tests {
         // the existing entry should remain and the new entries should be appended
         let stored_entries = paxos.internal_storage.get_entries(0, 3).unwrap();
         assert_eq!(stored_entries, vec![existing, new_entry_1, new_entry_2]);
+        assert_eq!(
+            paxos.internal_storage.get_accepted_idx(),
+            expected_accepted_idx
+        );
+    }
+
+    #[test]
+    fn appends_missing_entries_when_log_id_exceeds_modification_slice_index() {
+        // Regression test: append_start must store the modification vector index, not log_id.
+        // With the old bug, the first missing entry has log_id = 4, causing a panic on
+        // lm.modifications[5..] even though there are only 2 modifications.
+        let existing_entries = vec![
+            TestEntry::new(1, Uuid::new_v4(), 10),
+            TestEntry::new(2, Uuid::new_v4(), 20),
+            TestEntry::new(3, Uuid::new_v4(), 30),
+            TestEntry::new(4, Uuid::new_v4(), 40),
+        ];
+        let mut paxos = create_seq_paxos(existing_entries.clone(), 4);
+        paxos.state = (Role::Follower, Phase::Accept);
+
+        let appended_1 = TestEntry::new(50, Uuid::new_v4(), 50);
+        let appended_2 = TestEntry::new(60, Uuid::new_v4(), 60);
+        let modifications = build_modifications(4, vec![appended_1.clone(), appended_2.clone()]);
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+
+        paxos.handle_log_modifications(modifications);
+
+        let stored_entries = paxos.internal_storage.get_entries(0, 6).unwrap();
+        assert_eq!(
+            stored_entries,
+            vec![
+                existing_entries[0].clone(),
+                existing_entries[1].clone(),
+                existing_entries[2].clone(),
+                existing_entries[3].clone(),
+                appended_1,
+                appended_2,
+            ]
+        );
         assert_eq!(
             paxos.internal_storage.get_accepted_idx(),
             expected_accepted_idx
