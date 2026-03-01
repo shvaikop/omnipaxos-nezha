@@ -14,7 +14,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-slog = { version = "2.7.0", optional = true }
+slog = { version = "2.7.0", optional = true, features = ["max_level_trace"] }
 slog-term = { version = "2.9.0", optional = true }
 slog-async = { version = "2.7.0", optional = true }
 serde = { version = "1.0", optional = true, features = ["derive"] }
