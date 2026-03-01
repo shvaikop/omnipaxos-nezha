@@ -300,7 +300,7 @@ where
             trace!(
                 self.logger,
                 "Local log before LogModifications";
-                "accepted_idx" => accepted_idx,
+                "accepted_idx" => current_accepted_idx,
                 "log_len" => local_log_before.len(),
             );
         }
@@ -360,10 +360,9 @@ where
         }
 
         // update the accepted index to the end of the modifications, which is the new sync point for the leader
-        // TODO: add + 1 to accepted_idx
         if let Some(end) = lm.modifications.last() {
             self.internal_storage
-                .set_accepted_idx(end.log_id)
+                .set_accepted_idx(end.log_id + 1)
                 .expect(WRITE_ERROR_MSG);
 
             for i in current_accepted_idx..=end.log_id {
@@ -684,7 +683,7 @@ mod tests {
             TestEntry::new(20, request_id_2, 25),
         ];
         let modifications = build_modifications(paxos.internal_storage.get_accepted_idx(), updated);
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -714,7 +713,7 @@ mod tests {
             paxos.internal_storage.get_accepted_idx(),
             vec![replacement.clone()],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -750,7 +749,7 @@ mod tests {
                 replacement_2.clone(),
             ],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -779,7 +778,7 @@ mod tests {
             paxos.internal_storage.get_accepted_idx(),
             vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -809,7 +808,7 @@ mod tests {
         let appended_1 = TestEntry::new(50, Uuid::new_v4(), 50);
         let appended_2 = TestEntry::new(60, Uuid::new_v4(), 60);
         let modifications = build_modifications(4, vec![appended_1.clone(), appended_2.clone()]);
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
