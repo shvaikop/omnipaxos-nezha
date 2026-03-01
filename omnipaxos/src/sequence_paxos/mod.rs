@@ -121,7 +121,7 @@ where
                     let s = config
                         .logger_file_path
                         .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str())
+                    create_logger(s.as_str(), slog::Level::Trace)
                 }
             },
         };
