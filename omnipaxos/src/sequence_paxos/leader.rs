@@ -432,7 +432,7 @@ where
 
         for pid in self.leader_state.get_promised_followers() {
             let leader_accepted_idx = self.internal_storage.get_accepted_idx();
-            let follower_accepted_idx = self.leader_state.get_accepted_idx(pid);
+            let follower_accepted_idx = self.leader_state.get_accepted_idx(pid).saturating_sub(3);
 
             let entries = self
                 .internal_storage
