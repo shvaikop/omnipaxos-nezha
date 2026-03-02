@@ -296,7 +296,7 @@ where
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             PaxosMsg::PrepareWithDeadline(prep) => self.handle_prepare_with_deadline(prep),
             PaxosMsg::FastReply(freply) => self.handle_fast_reply(freply, m.from),
-            PaxosMsg::SlowReply(_sreply) => todo!(),
+            PaxosMsg::SlowReply(_sreply) => self.handle_slow_reply(_sreply, m.from),
             PaxosMsg::LogModifications(lm) => self.handle_log_modifications(lm),
             PaxosMsg::LogStatus(ls) => self.handle_log_status(ls, m.from),
             PaxosMsg::CommitStatus(cs) => self.handle_commit_status(cs),
@@ -327,6 +327,13 @@ where
     }
 
     pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
+        // TODO:
+        //   if Leader
+        //     if Prepare: put in late buffer
+        //     if Accept: put either in early or late buffer
+        //  if Follower
+        //    if Prepare: put in late buffer + forward to leader to put in late buffer (initate slow path)
+        //    if Accept: put in early or late buffer
         if prep.entry.get_deadline() > self.last_released_deadline {
             #[cfg(feature = "logging")]
             trace!(self.logger, "PrepareWithDeadline buffered in early_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
@@ -419,6 +426,37 @@ where
             debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
             self.reply_set.remove(&request_id);
+        }
+    }
+
+    pub(crate) fn handle_slow_reply(&mut self, sreply: SlowReply, from: NodeId) {
+        if self.state.1 != Phase::Accept
+            || self
+                .reply_set
+                .get(&sreply.request_id)
+                .is_some_and(|(replies, _)| replies.contains_key(&from))
+        {
+            #[cfg(feature = "logging")]
+            trace!(self.logger, "Ignoring SlowReply"; "from" => from, "request_id" => ?sreply.request_id, "ballot" => ?sreply.n);
+            return;
+        }
+
+        let request_id = sreply.request_id;
+        let entry = self
+            .reply_set
+            .entry(request_id)
+            .or_insert_with(|| (HashMap::new(), None));
+
+        entry.0.insert(from, NezhaReply::Slow(sreply));
+        #[cfg(feature = "logging")]
+        trace!(self.logger, "SlowReply recorded"; "from" => from, "request_id" => ?request_id);
+
+        let is_committed = self.check_committed(request_id);
+        if is_committed {
+            #[cfg(feature = "logging")]
+            debug!(self.logger, "Request committed via slow path"; "request_id" => ?request_id);
+            self.committed.insert(request_id, true);
+            // TODO: figure out a way to remove it from reply_set without it being reinserted back
         }
     }
 
@@ -526,6 +564,7 @@ where
         // TODO: add deadline using clock simulator
         entry.set_deadline(0);
         entry.set_request_id(RequestId::new_v4());
+        entry.set_nezha_proxy_id(self.pid);
 
         match self.state {
             // TODO: replace with commented out paths below once clock simulator is implemented
@@ -707,6 +746,7 @@ mod tests {
         value: u64,
         request_id: RequestId,
         deadline: u64,
+        nezha_proxy_id: NodeId,
     }
 
     #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -746,6 +786,14 @@ mod tests {
         fn set_request_id(&mut self, request_id: RequestId) {
             self.request_id = request_id;
         }
+
+        fn get_nezha_proxy_id(&self) -> NodeId {
+            self.nezha_proxy_id
+        }
+
+        fn set_nezha_proxy_id(&mut self, node_id: NodeId) {
+            self.nezha_proxy_id = node_id;
+        }
     }
 
     impl TestEntry {
@@ -754,6 +802,7 @@ mod tests {
                 value,
                 request_id,
                 deadline,
+                nezha_proxy_id: 0,
             }
         }
     }
@@ -1025,6 +1074,119 @@ mod tests {
         paxos.handle_fast_reply(freply, 2);
 
         assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn slow_reply_accumulates_in_reply_set() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+
+        let sreply = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply, 2);
+
+        assert!(paxos.reply_set.contains_key(&rid));
+        let (replies, leader_opt) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(replies.get(&2), Some(NezhaReply::Slow(_))));
+        assert!(leader_opt.is_none());
+    }
+
+    #[test]
+    fn slow_reply_ignores_duplicate_from_same_node() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+
+        let sreply1 = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+        let sreply2 = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply1, 2);
+        paxos.handle_slow_reply(sreply2, 2);
+
+        let (replies, _) = paxos.reply_set.get(&rid).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(replies.get(&2), Some(NezhaReply::Slow(_))));
+    }
+
+    #[test]
+    fn slow_reply_ignored_when_not_in_accept_phase() {
+        let mut paxos = create_paxos(1, vec![1, 2, 3, 4, 5], Role::Follower, Phase::Prepare);
+        let ballot = Ballot::with(1, 1, 1, 5);
+        paxos
+            .internal_storage
+            .set_promise(ballot)
+            .expect(WRITE_ERROR_MSG);
+        let rid = Uuid::new_v4();
+
+        let sreply = SlowReply {
+            n: ballot,
+            request_id: rid,
+        };
+
+        paxos.handle_slow_reply(sreply, 2);
+
+        assert!(!paxos.reply_set.contains_key(&rid));
+    }
+
+    #[test]
+    fn slow_reply_commits_once_accept_quorum_is_reached_with_leader_reply_present() {
+        // 5 nodes: majority/accept quorum = 3. Current implementation counts only SlowReply
+        // messages toward the slow-path quorum, so 3 slow replies are needed in addition to
+        // the leader FastReply being present.
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            3,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            4,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            5,
+        );
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
     }
 
     #[test]

@@ -48,6 +48,14 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
             fn stable_encode(&self, out: &mut Vec<u8>) {
                 out.push(0)
             }
+
+            fn get_nezha_proxy_id(&self) -> ::omnipaxos::util::NodeId {
+                0
+            }
+
+            fn set_nezha_proxy_id(&mut self, _node_id: ::omnipaxos::util::NodeId) {
+                //
+            }
         }
     };
 
@@ -201,6 +209,14 @@ pub fn unicache_entry_derive(input: TokenStream) -> TokenStream {
                     /// TODO: always gets encoded to 0, implement properly if will be needed
                     fn stable_encode(&self, out: &mut Vec<u8>) {
                         out.push(0)
+                    }
+
+                    fn get_nezha_proxy_id(&self) -> ::omnipaxos::util::NodeId {
+                        0
+                    }
+
+                    fn set_nezha_proxy_id(&mut self, _node_id: ::omnipaxos::util::NodeId) {
+                        //
                     }
                 }
 

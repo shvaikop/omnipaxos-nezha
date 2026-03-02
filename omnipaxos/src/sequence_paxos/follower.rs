@@ -293,14 +293,14 @@ where
         #[cfg(feature = "logging")]
         trace!(self.logger, "Received LogModifications"; "msg" => format!("{:?}", lm));
 
+        let current_accepted_idx = self.internal_storage.get_accepted_idx();
         #[cfg(feature = "logging")]
         {
-            let accepted_idx = self.internal_storage.get_accepted_idx();
             let local_log_before = self.internal_storage.get_suffix(0).unwrap_or_default();
             trace!(
                 self.logger,
                 "Local log before LogModifications";
-                "accepted_idx" => accepted_idx,
+                "accepted_idx" => current_accepted_idx,
                 "log_len" => local_log_before.len(),
             );
         }
@@ -322,13 +322,13 @@ where
         }
 
         if let Some(first_modification) = lm.modifications.first() {
-            if first_modification.log_id != self.internal_storage.get_accepted_idx() {
+            if first_modification.log_id != current_accepted_idx {
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
                     "First log modification's log_id {} does not match accepted_idx {}",
                     first_modification.log_id,
-                    self.internal_storage.get_accepted_idx()
+                    current_accepted_idx
                 );
             }
         }
@@ -362,8 +362,12 @@ where
         // update the accepted index to the end of the modifications, which is the new sync point for the leader
         if let Some(end) = lm.modifications.last() {
             self.internal_storage
-                .set_accepted_idx(end.log_id)
+                .set_accepted_idx(end.log_id + 1)
                 .expect(WRITE_ERROR_MSG);
+
+            for i in current_accepted_idx..=end.log_id {
+                self.send_slow_reply(i);
+            }
         }
 
         #[cfg(feature = "logging")]
@@ -405,6 +409,43 @@ where
         self.internal_storage
             .append_entries_without_batching(entries, true)
             .expect(WRITE_ERROR_MSG);
+    }
+
+    fn send_slow_reply(&mut self, log_idx: usize) {
+        let log_entry = match self
+            .internal_storage
+            .get_entry(log_idx)
+            .expect(READ_ERROR_MSG)
+        {
+            Some(entry) => entry,
+            None => {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "Missing log entry";
+                    "log_idx" => log_idx
+                );
+                return;
+            }
+        };
+        let slow_reply = SlowReply {
+            n: self.internal_storage.get_promise(),
+            request_id: log_entry.get_request_id(),
+        };
+
+        #[cfg(feature = "logging")]
+        debug!(
+            self.logger,
+            "Sending SlowReply message";
+            "from" => self.pid,
+            "to" => log_entry.get_nezha_proxy_id(),
+            "msg" => format!("{:?}", log_entry),
+        );
+        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            from: self.pid,
+            to: log_entry.get_nezha_proxy_id(),
+            msg: PaxosMsg::SlowReply(slow_reply),
+        }))
     }
 
     pub(crate) fn send_log_status(&mut self) {
@@ -515,6 +556,7 @@ mod tests {
         value: u64,
         request_id: RequestId,
         deadline: u64,
+        nezha_proxy_id: NodeId,
     }
 
     #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -556,6 +598,14 @@ mod tests {
         fn set_request_id(&mut self, request_id: RequestId) {
             self.request_id = request_id;
         }
+
+        fn get_nezha_proxy_id(&self) -> NodeId {
+            self.nezha_proxy_id
+        }
+
+        fn set_nezha_proxy_id(&mut self, nezha_proxy_id: NodeId) {
+            self.nezha_proxy_id = nezha_proxy_id;
+        }
     }
 
     impl TestEntry {
@@ -564,6 +614,7 @@ mod tests {
                 value,
                 request_id,
                 deadline,
+                nezha_proxy_id: 0,
             }
         }
     }
@@ -632,7 +683,7 @@ mod tests {
             TestEntry::new(20, request_id_2, 25),
         ];
         let modifications = build_modifications(paxos.internal_storage.get_accepted_idx(), updated);
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -662,7 +713,7 @@ mod tests {
             paxos.internal_storage.get_accepted_idx(),
             vec![replacement.clone()],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -698,7 +749,7 @@ mod tests {
                 replacement_2.clone(),
             ],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -727,7 +778,7 @@ mod tests {
             paxos.internal_storage.get_accepted_idx(),
             vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
         );
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 
@@ -757,7 +808,7 @@ mod tests {
         let appended_1 = TestEntry::new(50, Uuid::new_v4(), 50);
         let appended_2 = TestEntry::new(60, Uuid::new_v4(), 60);
         let modifications = build_modifications(4, vec![appended_1.clone(), appended_2.clone()]);
-        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id;
+        let expected_accepted_idx = modifications.modifications.last().unwrap().log_id + 1;
 
         paxos.handle_log_modifications(modifications);
 

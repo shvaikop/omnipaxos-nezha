@@ -1,3 +1,4 @@
+use omnipaxos::util::NodeId;
 use omnipaxos::{
     messages::RequestId,
     storage::{Entry, NoSnapshot},
@@ -34,5 +35,13 @@ impl Entry for LogEntry {
         out.extend_from_slice(&self.value.to_le_bytes());
         out.extend_from_slice(&self.deadline.to_le_bytes());
         out.extend(self.request_id.to_bytes_le());
+    }
+
+    fn get_nezha_proxy_id(&self) -> NodeId {
+        0
+    }
+
+    fn set_nezha_proxy_id(&mut self, _node_id: NodeId) {
+        // no-op for testing
     }
 }
