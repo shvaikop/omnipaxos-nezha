@@ -442,6 +442,11 @@ where
     pub fn send_commit_status(&mut self) {
         self.seq_paxos.send_commit_status();
     }
+
+    /// Returns Nezha commit path statistics (fast path vs slow path commit counts).
+    pub fn get_nezha_stats(&self) -> crate::sequence_paxos::NezhaStats {
+        self.seq_paxos.get_nezha_stats()
+    }
 }
 
 /// An error indicating a failed proposal due to the current cluster configuration being already stopped
