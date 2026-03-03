@@ -38,7 +38,6 @@ pub mod util;
 pub mod utils;
 
 /// Clock simulation module.
-
 pub mod clock;
 
 #[cfg(feature = "macros")]

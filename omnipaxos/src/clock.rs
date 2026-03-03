@@ -3,7 +3,6 @@
 //! Currently returns hardware time in microseconds with zero uncertainty.
 //! Drift and uncertainty will be added in later steps.
 
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Simulated clock API (step 1): returns hardware time in microseconds.

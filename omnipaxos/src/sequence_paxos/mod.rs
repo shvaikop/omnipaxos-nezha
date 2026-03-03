@@ -50,6 +50,7 @@ where
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<NodeId>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional Leader NodeId that sent FastReply)>
     committed: HashMap<RequestId, bool>,
+    pub(crate) committed_idx: usize,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -113,6 +114,7 @@ where
             late_buffer: HashMap::new(),
             reply_set: HashMap::new(),
             committed: HashMap::new(),
+            committed_idx: 0,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -223,6 +225,22 @@ where
     /// Return the decided index.
     pub(crate) fn get_decided_idx(&self) -> usize {
         self.internal_storage.get_decided_idx()
+    }
+
+    /// Return the committed index
+    pub(crate) fn get_committed_idx(&self) -> usize {
+        // if the committed index is 0 or less than decided idx, return the decided idx since it's more correct
+        if self.committed_idx == 0 || self.committed_idx < self.internal_storage.get_decided_idx() {
+            self.internal_storage.get_decided_idx()
+        } else {
+            self.committed_idx
+        }
+    }
+
+    /// Sets the committed index to `idx` if `idx` is greater than the current committed index.
+    /// This should only be called by the leader when it determines that a new commit point has been reached.
+    pub(crate) fn set_committed_idx(&mut self, idx: usize) {
+        self.committed_idx = self.committed_idx.max(idx);
     }
 
     /// Return trim index from storage.
@@ -371,6 +389,7 @@ where
                         .expect(READ_ERROR_MSG),
                     n: self.internal_storage.get_promise(),
                     is_leader: self.state.0 == Role::Leader,
+                    log_idx: inserted_index + 1,
                 };
 
                 #[cfg(feature = "logging")]
@@ -413,9 +432,11 @@ where
             .reply_set
             .entry(request_id)
             .or_insert_with(|| (HashMap::new(), None));
-        if freply.is_leader {
+        let is_leader_reply = freply.is_leader;
+        if is_leader_reply {
             entry.1 = Some(from);
         }
+        let commit_point = freply.log_idx + 1;
         entry.0.insert(from, NezhaReply::Fast(freply));
         #[cfg(feature = "logging")]
         trace!(self.logger, "FastReply recorded"; "from" => from, "request_id" => ?request_id, "is_leader" => entry.1.is_some());
@@ -426,6 +447,9 @@ where
             debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
             self.reply_set.remove(&request_id);
+            if is_leader_reply {
+                self.set_committed_idx(commit_point);
+            }
         }
     }
 
@@ -971,6 +995,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: false,
+            log_idx: 0,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -994,6 +1019,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true, // leader reply
+            log_idx: 0,
         };
 
         paxos.handle_fast_reply(freply, 3);
@@ -1016,6 +1042,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: false,
+            log_idx: 0,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -1035,12 +1062,14 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: false,
+            log_idx: 0,
         };
         let freply2 = FastReply {
             n: ballot,
             request_id: rid,
             log_hash,
             is_leader: true, // different is_leader to check it's truly ignored
+            log_idx: 0,
         };
 
         paxos.handle_fast_reply(freply1, 2);
@@ -1069,6 +1098,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: false,
+            log_idx: 0,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -1154,6 +1184,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1190,6 +1221,123 @@ mod tests {
     }
 
     #[test]
+    fn test_committed_idx_with_fast_reply_from_leader() {
+        // 5 nodes: majority/accept quorum = 3. Current implementation counts only SlowReply
+        // messages toward the slow-path quorum, so 3 slow replies are needed in addition to
+        // the leader FastReply being present.
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            3,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            4,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            5,
+        );
+
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+            log_idx: 0,
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
+        assert!(paxos.committed_idx == 1);
+    }
+
+    #[test]
+    fn test_committed_idx_with_fast_reply_from_follower() {
+        // 5 nodes: majority/accept quorum = 3. Current implementation counts only SlowReply
+        // messages toward the slow-path quorum, so 3 slow replies are needed in addition to
+        // the leader FastReply being present.
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            3,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            4,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+            log_idx: 0,
+        };
+        paxos.handle_fast_reply(leader_reply, 1);
+
+        let follower_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: false,
+            log_idx: 0,
+        };
+        paxos.handle_fast_reply(follower_reply, 2);
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
+        assert!(paxos.committed_idx == 0); // should still be 0 since the latest fast reply was from a follower
+    }
+
+    #[test]
+    fn test_committed_idx_stays_monotonic() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+
+        paxos.set_committed_idx(5);
+        assert_eq!(paxos.get_committed_idx(), 5);
+
+        paxos.set_committed_idx(3);
+        assert_eq!(paxos.get_committed_idx(), 5);
+
+        paxos.set_committed_idx(8);
+        assert_eq!(paxos.get_committed_idx(), 8);
+    }
+
+    #[test]
     fn check_committed_returns_false_without_leader_reply() {
         let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
         let ballot = paxos.internal_storage.get_promise();
@@ -1203,6 +1351,7 @@ mod tests {
                 request_id: rid,
                 log_hash,
                 is_leader: false,
+                log_idx: 0,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1226,6 +1375,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1236,6 +1386,7 @@ mod tests {
                 request_id: rid,
                 log_hash,
                 is_leader: false,
+                log_idx: 0,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1249,6 +1400,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: false,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(freply, 5);
 
@@ -1273,6 +1425,7 @@ mod tests {
             request_id: rid,
             log_hash: leader_hash,
             is_leader: true,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1283,6 +1436,7 @@ mod tests {
                 request_id: rid,
                 log_hash: leader_hash,
                 is_leader: false,
+                log_idx: 0,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1293,6 +1447,7 @@ mod tests {
             request_id: rid,
             log_hash: different_hash,
             is_leader: false,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(freply_mismatch, 5);
 
@@ -1320,6 +1475,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true,
+            log_idx: 0,
         };
         paxos.handle_fast_reply(freply, 1);
 
@@ -1350,6 +1506,7 @@ mod tests {
                 request_id: rid,
                 log_hash,
                 is_leader: true,
+                log_idx: 0,
             }),
         );
         replies.insert(
