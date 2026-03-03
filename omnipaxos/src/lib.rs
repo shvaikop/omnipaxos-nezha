@@ -24,6 +24,8 @@ pub use omni_paxos::*;
 
 /// The core replication algorithm of OmniPaxos.
 pub(crate) mod sequence_paxos;
+/// Nezha commit path statistics.
+pub use sequence_paxos::NezhaStats;
 /// Traits and structs related to the backend storage of an OmniPaxos server.
 pub mod storage;
 #[cfg(test)]

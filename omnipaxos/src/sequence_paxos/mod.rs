@@ -24,6 +24,15 @@ use std::{
 pub mod follower;
 pub mod leader;
 
+/// Statistics for Nezha fast path and slow path commits.
+#[derive(Clone, Debug, Default)]
+pub struct NezhaStats {
+    /// Number of requests committed via the fast path
+    pub fast_path_commits: u64,
+    /// Number of requests committed via the slow path
+    pub slow_path_commits: u64,
+}
+
 /// a Sequence Paxos replica. Maintains local state of the replicated log, handles incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
 /// User also has to periodically fetch the decided entries that are guaranteed to be strongly consistent and linearizable, and therefore also safe to be used in the higher level application.
 /// If snapshots are not desired to be used, use `()` for the type parameter `S`.
@@ -51,6 +60,7 @@ where
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<NodeId>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional Leader NodeId that sent FastReply)>
     committed: HashMap<RequestId, bool>,
     pub(crate) committed_idx: usize,
+    nezha_stats: NezhaStats,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -115,6 +125,7 @@ where
             reply_set: HashMap::new(),
             committed: HashMap::new(),
             committed_idx: 0,
+            nezha_stats: NezhaStats::default(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -147,6 +158,10 @@ where
 
     pub(crate) fn get_state(&self) -> &(Role, Phase) {
         &self.state
+    }
+
+    pub(crate) fn get_nezha_stats(&self) -> NezhaStats {
+        self.nezha_stats.clone()
     }
 
     pub(crate) fn get_promise(&self) -> Ballot {
@@ -446,6 +461,7 @@ where
             #[cfg(feature = "logging")]
             debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
+            self.nezha_stats.fast_path_commits += 1;
             self.reply_set.remove(&request_id);
             if is_leader_reply {
                 self.set_committed_idx(commit_point);
@@ -480,6 +496,7 @@ where
             #[cfg(feature = "logging")]
             debug!(self.logger, "Request committed via slow path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
+            self.nezha_stats.slow_path_commits += 1;
             // TODO: figure out a way to remove it from reply_set without it being reinserted back
         }
     }
