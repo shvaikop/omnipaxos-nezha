@@ -18,7 +18,7 @@ use crate::{
 use slog::{debug, info, trace, warn, Logger};
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BTreeMap, BinaryHeap, HashMap},
     fmt::Debug,
     vec,
 };
@@ -57,9 +57,9 @@ where
     cached_promise_message: Option<Promise<T>>,
     // Nezha attributes
     clock: Clock,
+    last_released_deadline: u64, // TODO: use correct type for clock simulator
+    late_buffer: BTreeMap<(u64, RequestId), PrepareWithDeadline<T>>,
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
-    last_released_deadline: u64,
-    late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<(NodeId, usize)>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional (Leader NodeId, commit_idx) that sent FastReply)>
     committed: HashMap<RequestId, bool>,
     committed_idx: usize,
@@ -125,7 +125,7 @@ where
             clock: Clock::new(),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
-            late_buffer: HashMap::new(),
+            late_buffer: BTreeMap::new(),
             reply_set: HashMap::new(),
             committed: HashMap::new(),
             committed_idx: 0,
@@ -411,7 +411,9 @@ where
         } else {
             #[cfg(feature = "logging")]
             trace!(self.logger, "PrepareWithDeadline buffered in late_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
-            self.late_buffer.insert(prep.entry.get_request_id(), prep);
+            let deadline = prep.entry.get_deadline();
+            let request_id = prep.entry.get_request_id();
+            self.late_buffer.insert((deadline, request_id), prep);
         }
     }
 
@@ -419,6 +421,19 @@ where
         // If not in Accept phase, don't process early buffer
         if self.state.1 != Phase::Accept {
             return;
+        }
+        if !self.late_buffer.is_empty() && self.state.0 == Role::Leader {
+            // Transfer requests from the late buffer to the early buffer
+            for (i, ((_deadline, _request_id), mut prep)) in std::mem::take(&mut self.late_buffer)
+                .into_iter()
+                .enumerate()
+            {
+                // Modify the deadline to be eligible for early buffer
+                // Each deadline will be different by 1us (not necessary, avoids having the same deadlines in the log)
+                prep.entry
+                    .set_deadline(self.last_released_deadline + 1 + i as u64);
+                self.early_buffer.push(Reverse(prep));
+            }
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
             if prep.entry.get_deadline() < self.clock.now_us() {
@@ -974,7 +989,7 @@ mod tests {
 
         assert!(paxos.early_buffer.is_empty());
         assert_eq!(paxos.late_buffer.len(), 1);
-        assert!(paxos.late_buffer.contains_key(&rid));
+        assert!(paxos.late_buffer.contains_key(&(30, rid)));
     }
 
     #[test]
@@ -1043,6 +1058,68 @@ mod tests {
 
         // Nothing should be consumed
         assert_eq!(paxos.early_buffer.len(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn process_early_buffer_moves_late_buffer_entries_to_early_buffer_for_leader() {
+        let mut paxos = create_accept_paxos(1, true, vec![1, 2, 3]);
+        paxos.last_released_deadline = 10;
+
+        let rid1 = Uuid::new_v4();
+        let rid2 = Uuid::new_v4();
+        paxos.late_buffer.insert(
+            (5, rid1),
+            PrepareWithDeadline {
+                from: 2,
+                entry: TestEntry::new(1, rid1, 5),
+                sent: 0,
+            },
+        );
+        paxos.late_buffer.insert(
+            (6, rid2),
+            PrepareWithDeadline {
+                from: 3,
+                entry: TestEntry::new(2, rid2, 6),
+                sent: 0,
+            },
+        );
+
+        paxos.process_early_buffer();
+
+        assert!(paxos.late_buffer.is_empty());
+        assert_eq!(paxos.early_buffer.len(), 2);
+
+        let moved_deadlines: Vec<u64> = paxos
+            .early_buffer
+            .iter()
+            .map(|Reverse(prep)| prep.entry.get_deadline())
+            .collect();
+        assert!(moved_deadlines.iter().all(|deadline| *deadline >= 10));
+        assert!(moved_deadlines.iter().any(|deadline| *deadline == 10));
+        assert!(moved_deadlines.iter().any(|deadline| *deadline == 11));
+    }
+
+    #[test]
+    fn process_early_buffer_does_not_move_late_buffer_entries_for_follower() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
+        paxos.last_released_deadline = 10;
+
+        let rid = Uuid::new_v4();
+        paxos.late_buffer.insert(
+            (5, rid),
+            PrepareWithDeadline {
+                from: 2,
+                entry: TestEntry::new(1, rid, 5),
+                sent: 0,
+            },
+        );
+
+        paxos.process_early_buffer();
+
+        assert_eq!(paxos.late_buffer.len(), 1);
+        assert!(paxos.late_buffer.contains_key(&(5, rid)));
+        assert!(paxos.early_buffer.is_empty());
     }
 
     #[test]
