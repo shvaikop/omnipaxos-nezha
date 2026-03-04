@@ -12,7 +12,6 @@ pub struct Clock;
 
 impl Clock {
     /// Creates a new clock instance.
-
     pub fn new() -> Self {
         Clock
     }
