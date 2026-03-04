@@ -1044,7 +1044,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true, // leader reply
-            log_idx: None,
+            log_idx: Some(1),
         };
 
         paxos.handle_fast_reply(freply, 3);
@@ -1287,7 +1287,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true,
-            log_idx: Some(0),
+            log_idx: Some(1),
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1330,7 +1330,7 @@ mod tests {
             request_id: rid,
             log_hash,
             is_leader: true,
-            log_idx: Some(0),
+            log_idx: Some(1),
         };
         paxos.handle_fast_reply(leader_reply, 1);
 
