@@ -391,10 +391,12 @@ where
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
-                // Append entry without incrementing accepted_idx
+                let is_leader = self.state.0 == Role::Leader;
+
+                // Only leader increments accepted_idx when appending entry
                 let inserted_index = self
                     .internal_storage
-                    .append_entries_without_batching(vec![prep.entry.clone()], false)
+                    .append_entries_without_batching(vec![prep.entry.clone()], is_leader)
                     .expect(WRITE_ERROR_MSG);
 
                 let is_leader = self.state.0 == Role::Leader;
@@ -415,6 +417,10 @@ where
 
                 #[cfg(feature = "logging")]
                 debug!(self.logger, "Processed entry from early_buffer"; "request_id" => ?prep.entry.get_request_id(), "inserted_index" => inserted_index, "is_leader" => self.state.0 == Role::Leader);
+
+                if is_leader {
+                    self.broadcast_log_modifications();
+                }
 
                 // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
                 // of replies for this request
@@ -780,7 +786,7 @@ mod tests {
     use crate::messages::RequestId;
     use crate::storage::{Entry, LogHash, Snapshot};
     use crate::test_storage::TestStorage;
-    use crate::util::{FlexibleQuorum, WRITE_ERROR_MSG};
+    use crate::util::WRITE_ERROR_MSG;
     use crate::{ClusterConfig, OmniPaxosConfig, ServerConfig};
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
