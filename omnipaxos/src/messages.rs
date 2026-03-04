@@ -219,7 +219,7 @@ pub mod sequence_paxos {
         /// The reply was sent by the leader
         pub is_leader: bool,
         /// The commit point sent by leader
-        pub log_idx: usize,
+        pub log_idx: Option<usize>,
     }
 
     /// Slow path reply from both leaders and followers to proxy
