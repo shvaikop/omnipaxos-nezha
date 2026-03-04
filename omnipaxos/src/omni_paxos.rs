@@ -334,15 +334,7 @@ where
 
     /// Read all committed entries starting at `from_idx` (inclusive) in the log. Returns `None` if `from_idx` is out of bounds.
     pub fn read_committed_suffix(&self, from_idx: usize) -> Option<Vec<LogEntry<T>>> {
-        let committed_idx = self.get_committed_idx();
-        if from_idx >= committed_idx {
-            return None;
-        }
-
-        self.seq_paxos
-            .internal_storage
-            .read(from_idx..committed_idx)
-            .expect("storage error while trying to read committed log suffix")
+        self.seq_paxos.read_committed_suffix(from_idx)
     }
 
     /// Handle an incoming message
