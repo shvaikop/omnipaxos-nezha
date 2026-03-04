@@ -426,7 +426,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn broadcast_log_modifications(&mut self) {
         let n: Ballot = self.leader_state.n_leader;
 
