@@ -332,6 +332,11 @@ where
             .expect("storage error while trying to read decided log suffix")
     }
 
+    /// Read all committed entries starting at `from_idx` (inclusive) in the log. Returns `None` if `from_idx` is out of bounds.
+    pub fn read_committed_suffix(&self, from_idx: usize) -> Option<Vec<LogEntry<T>>> {
+        self.seq_paxos.read_committed_suffix(from_idx)
+    }
+
     /// Handle an incoming message
     pub fn handle_incoming(&mut self, m: Message<T>) {
         match m {

@@ -1,4 +1,5 @@
 use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::LeaderState};
+use crate::util::LogEntry;
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
@@ -264,6 +265,39 @@ where
     /// Return trim index from storage.
     pub(crate) fn get_compacted_idx(&self) -> usize {
         self.internal_storage.get_compacted_idx()
+    }
+
+    pub(crate) fn read_committed_suffix(&self, from_idx: usize) -> Option<Vec<LogEntry<T>>> {
+        let committed_idx = self.get_committed_idx();
+        if from_idx >= committed_idx {
+            #[cfg(feature = "logging")]
+            slog::error!(
+                self.logger,
+                "read_committed_suffix returned None";
+                "from_idx" => from_idx,
+                "committed_idx" => committed_idx,
+                "reason" => "from_idx_out_of_bounds"
+            );
+            return None;
+        }
+
+        let committed_suffix = self
+            .internal_storage
+            .read(from_idx..committed_idx)
+            .expect("storage error while trying to read committed log suffix");
+
+        if committed_suffix.is_none() {
+            #[cfg(feature = "logging")]
+            slog::error!(
+                self.logger,
+                "read_committed_suffix returned None";
+                "from_idx" => from_idx,
+                "committed_idx" => committed_idx,
+                "reason" => "storage_read_returned_none"
+            );
+        }
+
+        committed_suffix
     }
 
     fn handle_compaction(&mut self, c: Compaction) {
