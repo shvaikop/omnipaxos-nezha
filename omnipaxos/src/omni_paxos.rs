@@ -263,6 +263,11 @@ where
         self.seq_paxos.get_decided_idx()
     }
 
+    /// Return the commited index
+    pub fn get_committed_idx(&self) -> usize {
+        self.seq_paxos.get_committed_idx()
+    }
+
     /// Return trim index from storage.
     pub fn get_compacted_idx(&self) -> usize {
         self.seq_paxos.get_compacted_idx()
