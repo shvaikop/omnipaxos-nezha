@@ -406,7 +406,7 @@ where
                     n: self.internal_storage.get_promise(),
                     is_leader: is_leader,
                     log_idx: if is_leader {
-                        Some(inserted_index + 1)
+                        Some(inserted_index)
                     } else {
                         None
                     },
@@ -455,7 +455,7 @@ where
         if freply.is_leader {
             // inserting both the leader's pid and the commit point that the leader sent in the FastReply
             let committed_idx = freply.log_idx.unwrap_or(0);
-            entry.1 = Some((from, committed_idx + 1));
+            entry.1 = Some((from, committed_idx));
         }
         entry.0.insert(from, NezhaReply::Fast(freply));
         #[cfg(feature = "logging")]
@@ -1345,7 +1345,7 @@ mod tests {
 
         assert!(paxos.committed.contains_key(&rid));
         assert!(*paxos.committed.get(&rid).unwrap());
-        assert!(paxos.committed_idx == 1); 
+        assert!(paxos.committed_idx == 1);
     }
 
     #[test]
