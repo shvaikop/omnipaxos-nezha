@@ -36,11 +36,11 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
                 // default stub for derive users
             }
 
-            fn get_request_id(&self) -> ::uuid::Uuid {
-                ::uuid::Uuid::nil()
+            fn get_request_id(&self) -> ::omnipaxos::uuid::Uuid {
+                ::omnipaxos::uuid::Uuid::nil()
             }
 
-            fn set_request_id(&mut self, _request_id: ::uuid::Uuid) {
+            fn set_request_id(&mut self, _request_id: ::omnipaxos::uuid::Uuid) {
                 // default stub for derive users
             }
 

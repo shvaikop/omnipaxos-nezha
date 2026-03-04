@@ -2,6 +2,7 @@ use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::L
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
+    clock::Clock,
     messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
@@ -54,8 +55,9 @@ where
     current_seq_num: SequenceNumber,
     cached_promise_message: Option<Promise<T>>,
     // Nezha attributes
+    clock: Clock,
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
-    last_released_deadline: u64, // TODO: use correct type for clock simulator
+    last_released_deadline: u64,
     late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<NodeId>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional Leader NodeId that sent FastReply)>
     committed: HashMap<RequestId, bool>,
@@ -118,6 +120,7 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
+            clock: Clock::new(),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: HashMap::new(),
@@ -366,9 +369,7 @@ where
             return;
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
-            // TODO: check against clock simulator if deadline has passed
-            #[allow(unused_comparisons)]
-            if prep.entry.get_deadline() < 1 {
+            if prep.entry.get_deadline() < self.clock.now_us() {
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
@@ -578,37 +579,33 @@ where
     }
 
     fn propose_entry(&mut self, mut entry: T) {
-        // TODO: add deadline using clock simulator
-        entry.set_deadline(0);
+        // TODO: Currently using a constant 100 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
+        entry.set_deadline(self.clock.now_us() + 100);
         entry.set_request_id(RequestId::new_v4());
         entry.set_nezha_proxy_id(self.pid);
 
         match self.state {
-            // TODO: replace with commented out paths below once clock simulator is implemented
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
-            _ => self.forward_proposals(vec![entry]),
             // While undergoing leader change, fall back to normal OmniPaxos paths
-            // (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            // (Role::Follower, Phase::Prepare) => self.forward_proposals(vec![entry]),
+            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+            (Role::Follower, Phase::Prepare) => self.forward_proposals(vec![entry]),
 
-            // // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
-            // _ => {
-            //     let prep = PrepareWithDeadline {
-            //         from: self.pid,
-            //         entry: entry.clone(),
-            //         sent: 0, // TODO: add current time from clock simulator
-            //     };
+            // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
+            _ => {
+                let prep = PrepareWithDeadline {
+                    from: self.pid,
+                    entry: entry.clone(),
+                    sent: self.clock.now_us(),
+                };
 
-            //     for peer_pid in &self.peers {
-            //         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-            //             from: self.pid,
-            //             to: *peer_pid,
-            //             msg: PaxosMsg::PrepareWithDeadline(prep.clone()),
-            //         }));
-            //     }
-            //     self.handle_prepare_with_deadline(prep)
-            // }
+                for peer_pid in &self.peers {
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: *peer_pid,
+                        msg: PaxosMsg::PrepareWithDeadline(prep.clone()),
+                    }));
+                }
+                self.handle_prepare_with_deadline(prep)
+            }
         }
     }
 

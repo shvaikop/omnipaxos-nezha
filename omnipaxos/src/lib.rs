@@ -22,6 +22,9 @@ pub mod messages;
 mod omni_paxos;
 pub use omni_paxos::*;
 
+/// Clients must have access to `uuid` to set request IDs for Nezha entries
+pub use uuid;
+
 /// The core replication algorithm of OmniPaxos.
 pub(crate) mod sequence_paxos;
 /// Nezha commit path statistics.
