@@ -546,6 +546,13 @@ where
             debug!(self.logger, "Request committed via slow path"; "request_id" => ?request_id);
             self.committed.insert(request_id, true);
             self.nezha_stats.slow_path_commits += 1;
+
+            // find the log_idx for that request_id in reply_set and set it as the committed idx
+            if let Some((_replies, leader_meta)) = self.reply_set.get(&request_id) {
+                if let Some((_leader_id, commit_point)) = *leader_meta {
+                    self.set_committed_idx(commit_point);
+                }
+            }
             // TODO: figure out a way to remove it from reply_set without it being reinserted back
         }
     }
@@ -1331,6 +1338,118 @@ mod tests {
         assert!(paxos.committed.contains_key(&rid));
         assert!(*paxos.committed.get(&rid).unwrap());
         assert!(paxos.committed_idx == 1);
+    }
+
+    #[test]
+    fn test_committed_idx_with_slow_reply() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let rid = Uuid::new_v4();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            3,
+        );
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            4,
+        );
+
+        let leader_reply = FastReply {
+            n: ballot,
+            request_id: rid,
+            log_hash,
+            is_leader: true,
+            log_idx: Some(2),
+        };
+        paxos.handle_fast_reply(leader_reply, 2);
+        assert!(!paxos.committed.contains_key(&rid));
+
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid,
+            },
+            5,
+        );
+
+        assert!(paxos.committed.contains_key(&rid));
+        assert!(*paxos.committed.get(&rid).unwrap());
+        assert!(paxos.committed_idx == 2);
+    }
+
+    #[test]
+    fn test_committed_idx_advances_only_after_full_slow_quorum() {
+        let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3, 4, 5]);
+        let ballot = paxos.internal_storage.get_promise();
+        let log_hash = LogHash::compute::<TestEntry>(&[]);
+        let rid1 = Uuid::new_v4();
+        let rid2 = Uuid::new_v4();
+
+        for pid in [3, 4, 5] {
+            paxos.handle_slow_reply(
+                SlowReply {
+                    n: ballot,
+                    request_id: rid1,
+                },
+                pid,
+            );
+        }
+        paxos.handle_fast_reply(
+            FastReply {
+                n: ballot,
+                request_id: rid1,
+                log_hash,
+                is_leader: true,
+                log_idx: Some(1),
+            },
+            2,
+        );
+        // committed_id should be 1 since rid1 is committed, but rid2 is not committed yet
+        assert_eq!(paxos.get_committed_idx(), 1);
+
+        // for rid2, send fast_reply from leader (with log_idx 2) and 2 slow replies, but not the full quorum of 3 slow replies yet
+        paxos.handle_fast_reply(
+            FastReply {
+                n: ballot,
+                request_id: rid2,
+                log_hash,
+                is_leader: true,
+                log_idx: Some(2),
+            },
+            2,
+        );
+        for pid in [3, 4] {
+            paxos.handle_slow_reply(
+                SlowReply {
+                    n: ballot,
+                    request_id: rid2,
+                },
+                pid,
+            );
+            // committed_id should still be 1 since rid2 is not fully committed yet
+            assert_eq!(paxos.get_committed_idx(), 1);
+        }
+        
+        // reach full quorum for rid2 and check committed_id advances to 2
+        paxos.handle_slow_reply(
+            SlowReply {
+                n: ballot,
+                request_id: rid2,
+            },
+            5,
+        );
+        assert_eq!(paxos.get_committed_idx(), 2);
     }
 
     #[test]
