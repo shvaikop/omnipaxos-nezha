@@ -1,4 +1,4 @@
-use super::{internal_storage::InternalStorageConfig, Entry, StopSign};
+use super::{internal_storage::InternalStorageConfig, Entry, LogHash, StopSign};
 use crate::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
 use crate::{unicache::*, util::NodeId};
@@ -37,6 +37,8 @@ where
     /// Nezha optimization specific
     /// Index in log up to which log is synced with the leader
     pub sync_idx: usize,
+    /// Running XOR hash of all entries currently in the non-compacted log.
+    pub log_hash: LogHash,
 }
 
 impl<T> StateCache<T>
@@ -64,6 +66,7 @@ where
             unicache: T::UniCache::new(),
 
             sync_idx: 0,
+            log_hash: LogHash::new(),
         }
     }
 

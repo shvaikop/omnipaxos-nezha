@@ -72,6 +72,21 @@ where
         if self.state_cache.stopsign.is_some() {
             self.state_cache.accepted_idx += 1;
         }
+        self.recompute_running_hash()
+            .expect("Failed to compute initial log hash");
+    }
+
+    /// Recomputes `state_cache.log_hash` from scratch by reading all
+    /// entries that are currently in the (non-compacted) log
+    fn recompute_running_hash(&mut self) -> StorageResult<()> {
+        let compacted_idx = self.state_cache.compacted_idx;
+        // Use get_log_len to avoid accidentally including the stopsign slot.
+        let log_len = self.storage.get_log_len()?;
+        let entries = self
+            .storage
+            .get_entries(compacted_idx, compacted_idx + log_len)?;
+        self.state_cache.log_hash = LogHash::compute(&entries);
+        Ok(())
     }
 
     /// Read all decided entries from `from_idx` in the log. Returns `None` if `from_idx` is out of bounds.
@@ -309,6 +324,10 @@ where
         increment_accepted_idx: bool,
     ) -> StorageResult<usize> {
         let num_new_entries = entries.len();
+        // Update the running hash by toggling in new entries
+        for entry in entries.iter() {
+            self.state_cache.log_hash.toggle(entry);
+        }
         self.storage.append_entries(entries)?;
         if increment_accepted_idx {
             self.state_cache.accepted_idx += num_new_entries;
@@ -364,6 +383,7 @@ where
             }
         }
         self.storage.write_atomically(sync_txn)?;
+        self.recompute_running_hash()?;
         Ok(self.state_cache.accepted_idx)
     }
 
@@ -549,28 +569,20 @@ where
         self.state_cache.unicache = unicache;
     }
 
-    #[allow(dead_code)]
-    /// Nezha optimization specific
-    pub(crate) fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
-        self.state_cache.sync_idx = sync_point;
-        self.storage.set_sync_point(sync_point)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn get_sync_point(&self) -> usize {
-        self.state_cache.sync_idx
-    }
-
     pub(crate) fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
         self.storage.update_deadline(idx, deadline)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get_hash(&self, to: usize) -> StorageResult<LogHash> {
-        self.storage.get_hash(to)
+    pub(crate) fn get_hash(&self) -> StorageResult<LogHash> {
+        Ok(self.state_cache.log_hash)
     }
 
     pub(crate) fn replace_entry(&mut self, idx: usize, new_entry: T) -> StorageResult<T> {
-        self.storage.replace_entry(idx, new_entry)
+        // Toggle new entry hash in
+        self.state_cache.log_hash.toggle(&new_entry);
+        let old_entry = self.storage.replace_entry(idx, new_entry)?;
+        // Toggle the old entry's hash out
+        self.state_cache.log_hash.toggle(&old_entry);
+        Ok(old_entry)
     }
 }
