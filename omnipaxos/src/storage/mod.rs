@@ -161,8 +161,6 @@ pub enum StorageOp<T: Entry> {
     SetSnapshot(Option<T::Snapshot>),
 
     /// Nezha optimization specific
-    /// Sets the sync_point index in the log.
-    SetSyncPoint(usize),
     /// Update the deadline (u64) of an entry in the log at index (usize)
     UpdateDeadline(usize, u64),
     /// Replaces the entry at index idx in the log with new_entry, returns the old entry
@@ -243,12 +241,6 @@ where
 
     /// Returns the stored snapshot.
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>>;
-
-    /// Sets the sync_point index in the log.
-    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()>;
-
-    /// Returns the sync_point index in the log.
-    fn get_sync_point(&self) -> StorageResult<usize>;
 
     /// Updates the deadline of the entry at index `idx` in the log to `deadline`.
     fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()>;

@@ -16,7 +16,6 @@ const DECIDE: &[u8] = b"DECIDE";
 const TRIM: &[u8] = b"TRIM";
 const STOPSIGN: &[u8] = b"STOPSIGN";
 const SNAPSHOT: &[u8] = b"SNAPSHOT";
-const SYNC_POINT: &[u8] = b"SYNC_POINT";
 
 // Configuration for `PersistentStorage`.
 /// # Fields
@@ -260,12 +259,6 @@ where
         self.write_batch.put(SNAPSHOT, s);
         Ok(())
     }
-
-    fn batch_set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
-        let sync_point_bytes = usize::as_bytes(&sync_point);
-        self.write_batch.put(SYNC_POINT, sync_point_bytes);
-        Ok(())
-    }
 }
 
 /// An error returning the proposal that was failed due to that the current configuration is stopped.
@@ -298,7 +291,6 @@ where
                 StorageOp::Trim(idx) => self.batch_trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.batch_set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.batch_set_snapshot(snap)?,
-                StorageOp::SetSyncPoint(sync_point) => self.batch_set_sync_point(sync_point)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
                 StorageOp::ReplaceEntry(idx, new_entry) => {
                     let _ = self.replace_entry(idx, new_entry)?;
@@ -475,22 +467,6 @@ where
         let to_key = trimmed_idx.to_be_bytes();
         self.db
             .delete_range_cf(self.get_log_handle(), from_key, to_key)?;
-        Ok(())
-    }
-
-    fn get_sync_point(&self) -> StorageResult<usize> {
-        let sync_point = self.db.get_pinned(SYNC_POINT)?;
-        match sync_point {
-            Some(sync_point_bytes) => {
-                Ok(usize::read_from(sync_point_bytes.as_bytes()).ok_or(ErrHelper {})?)
-            }
-            None => Ok(0),
-        }
-    }
-
-    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
-        let sync_point_bytes = usize::as_bytes(&sync_point);
-        self.db.put(SYNC_POINT, sync_point_bytes)?;
         Ok(())
     }
 

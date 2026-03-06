@@ -451,10 +451,7 @@ where
                 let is_leader = self.state.0 == Role::Leader;
                 let freply = FastReply {
                     request_id: prep.entry.get_request_id(),
-                    log_hash: self
-                        .internal_storage
-                        .get_hash(inserted_index)
-                        .expect(READ_ERROR_MSG),
+                    log_hash: self.internal_storage.get_hash().expect(READ_ERROR_MSG),
                     n: self.internal_storage.get_promise(),
                     is_leader: is_leader,
                     log_idx: if is_leader {

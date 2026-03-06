@@ -15,7 +15,6 @@ pub(crate) struct TestStorage<T: Entry> {
     compacted_idx: usize,
     stopsign: Option<StopSign>,
     snapshot: Option<T::Snapshot>,
-    sync_point: usize,
 }
 
 impl<T: Entry> Default for TestStorage<T> {
@@ -29,7 +28,6 @@ impl<T: Entry> Default for TestStorage<T> {
             compacted_idx: 0,
             stopsign: None,
             snapshot: None,
-            sync_point: 0,
         }
     }
 }
@@ -69,7 +67,6 @@ impl<T: Entry> Storage<T> for TestStorage<T> {
                 StorageOp::Trim(idx) => self.trim(idx)?,
                 StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
                 StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
-                StorageOp::SetSyncPoint(sp) => self.set_sync_point(sp)?,
                 StorageOp::UpdateDeadline(idx, deadline) => self.update_deadline(idx, deadline)?,
                 StorageOp::ReplaceEntry(idx, entry) => {
                     let _ = self.replace_entry(idx, entry)?;
@@ -182,15 +179,6 @@ impl<T: Entry> Storage<T> for TestStorage<T> {
 
     fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
         Ok(self.snapshot.clone())
-    }
-
-    fn set_sync_point(&mut self, sync_point: usize) -> StorageResult<()> {
-        self.sync_point = sync_point;
-        Ok(())
-    }
-
-    fn get_sync_point(&self) -> StorageResult<usize> {
-        Ok(self.sync_point)
     }
 
     fn update_deadline(&mut self, idx: usize, deadline: u64) -> StorageResult<()> {
