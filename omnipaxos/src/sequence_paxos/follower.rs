@@ -456,11 +456,15 @@ where
             "to" => log_entry.get_nezha_proxy_id(),
             "msg" => format!("{:?}", log_entry),
         );
-        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-            from: self.pid,
-            to: log_entry.get_nezha_proxy_id(),
-            msg: PaxosMsg::SlowReply(slow_reply),
-        }))
+        if self.pid == log_entry.get_nezha_proxy_id() {
+            self.handle_slow_reply(slow_reply, self.pid)
+        } else {
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: log_entry.get_nezha_proxy_id(),
+                msg: PaxosMsg::SlowReply(slow_reply),
+            }))
+        }
     }
 
     pub(crate) fn send_log_status(&mut self) {
