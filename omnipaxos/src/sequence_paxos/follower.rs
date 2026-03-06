@@ -401,6 +401,12 @@ where
                 .internal_storage
                 .replace_entry(modification.log_id, modification.entry.clone())
                 .expect(WRITE_ERROR_MSG);
+            // delete the new entry from late_buffer if it is there
+            let late_key = (
+                modification.entry.get_deadline(),
+                modification.entry.get_request_id(),
+            );
+            self.late_buffer.remove(&late_key);
         }
     }
 
@@ -409,6 +415,15 @@ where
         self.internal_storage
             .append_entries_without_batching(entries, true)
             .expect(WRITE_ERROR_MSG);
+
+        // remove the entries that were added from the late buffer
+        for modification in modifications {
+            let late_key = (
+                modification.entry.get_deadline(),
+                modification.entry.get_request_id(),
+            );
+            self.late_buffer.remove(&late_key);
+        }
     }
 
     fn send_slow_reply(&mut self, log_idx: usize) {
@@ -728,6 +743,31 @@ mod tests {
     }
 
     #[test]
+    fn replacing_entry_removes_new_entry_from_late_buffer() {
+        let original = TestEntry::new(1, Uuid::new_v4(), 10);
+        let mut paxos = create_seq_paxos(vec![original], 0);
+        paxos.state = (Role::Follower, Phase::Accept);
+
+        let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
+        let late_key = (replacement.deadline, replacement.request_id);
+        paxos.late_buffer.insert(
+            late_key,
+            PrepareWithDeadline {
+                from: 2,
+                entry: replacement.clone(),
+                sent: 0,
+            },
+        );
+
+        let modifications = build_modifications(0, vec![replacement]);
+
+        paxos.handle_log_modifications(modifications);
+
+        assert!(!paxos.late_buffer.contains_key(&late_key));
+        assert!(paxos.late_buffer.is_empty());
+    }
+
+    #[test]
     fn replaces_two_entries_when_request_id_differs() {
         // create three entries and let accepted_idx be 0
         let untouched = TestEntry::new(1, Uuid::new_v4(), 10);
@@ -762,6 +802,54 @@ mod tests {
             paxos.internal_storage.get_accepted_idx(),
             expected_accepted_idx
         );
+    }
+
+    #[test]
+    fn appending_missing_entries_removes_appended_entries_from_late_buffer() {
+        let existing = TestEntry::new(1, Uuid::new_v4(), 11);
+        let mut paxos = create_seq_paxos(vec![existing.clone()], 0);
+        paxos.state = (Role::Follower, Phase::Accept);
+
+        let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
+        let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
+        let late_key_1 = (new_entry_1.deadline, new_entry_1.request_id);
+        let late_key_2 = (new_entry_2.deadline, new_entry_2.request_id);
+        let unrelated = TestEntry::new(4, Uuid::new_v4(), 44);
+        let unrelated_key = (unrelated.deadline, unrelated.request_id);
+
+        paxos.late_buffer.insert(
+            late_key_1,
+            PrepareWithDeadline {
+                from: 2,
+                entry: new_entry_1.clone(),
+                sent: 0,
+            },
+        );
+        paxos.late_buffer.insert(
+            late_key_2,
+            PrepareWithDeadline {
+                from: 2,
+                entry: new_entry_2.clone(),
+                sent: 0,
+            },
+        );
+        paxos.late_buffer.insert(
+            unrelated_key,
+            PrepareWithDeadline {
+                from: 2,
+                entry: unrelated,
+                sent: 0,
+            },
+        );
+
+        let modifications = build_modifications(0, vec![existing, new_entry_1, new_entry_2]);
+
+        paxos.handle_log_modifications(modifications);
+
+        assert!(!paxos.late_buffer.contains_key(&late_key_1));
+        assert!(!paxos.late_buffer.contains_key(&late_key_2));
+        assert!(paxos.late_buffer.contains_key(&unrelated_key));
+        assert_eq!(paxos.late_buffer.len(), 1);
     }
 
     #[test]
