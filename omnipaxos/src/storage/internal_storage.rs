@@ -180,7 +180,10 @@ where
     ) -> StorageResult<Option<IndexEntry>> {
         if idx < compacted_idx {
             Ok(Some(IndexEntry::Compacted))
-        } else if idx + 1 < accepted_idx {
+        }
+        // TODO: handle committed entries using committed_idx rather than accepted_idx somehow- currently just treating all non-compacted entries as Entry type
+        // else if idx + 1 < accepted_idx {
+        else if true {
             Ok(Some(IndexEntry::Entry))
         } else if idx + 1 == accepted_idx {
             match self.get_stopsign() {
