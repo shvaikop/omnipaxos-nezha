@@ -122,7 +122,7 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
-            clock: Clock::new(),
+            clock: Clock::new(50, 10_000_000, 200),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
