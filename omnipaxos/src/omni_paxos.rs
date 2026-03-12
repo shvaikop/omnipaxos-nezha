@@ -5,10 +5,13 @@ use crate::{
     sequence_paxos::{Phase, SequencePaxos},
     storage::{Entry, StopSign, Storage},
     util::{
-        defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, FLUSH_BATCH_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
+        defaults::{
+            BUFFER_SIZE, CLOCK_SYNC_INTERVAL, ELECTION_TIMEOUT, FLUSH_BATCH_TIMEOUT,
+            RESEND_MESSAGE_TIMEOUT,
+        },
         ConfigurationId, FlexibleQuorum, LogEntry, LogicalClock, NodeId,
     },
-    utils::{ui, ui::ClusterState},
+    utils::ui::{self, ClusterState},
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
 use serde::Deserialize;
@@ -175,6 +178,12 @@ pub struct ServerConfig {
     pub flush_batch_tick_timeout: u64,
     /// Custom priority for this node to be elected as the leader.
     pub leader_priority: u32,
+    /// Maximum clock uncertainty in microseconds upon re-synchronization.
+    pub clock_uncertainty: u64,
+    /// Clock drift in microseconds per second.
+    pub clock_drift: i64,
+    /// The interval in microseconds for clock synchronization.
+    pub clock_sync_interval: u64,
     /// The path where the default logger logs events.
     #[cfg(feature = "logging")]
     pub logger_file_path: Option<String>,
@@ -212,6 +221,9 @@ impl Default for ServerConfig {
             batch_size: 1,
             flush_batch_tick_timeout: FLUSH_BATCH_TIMEOUT,
             leader_priority: 0,
+            clock_uncertainty: 0,
+            clock_drift: 0,
+            clock_sync_interval: CLOCK_SYNC_INTERVAL,
             #[cfg(feature = "logging")]
             logger_file_path: None,
             #[cfg(feature = "logging")]

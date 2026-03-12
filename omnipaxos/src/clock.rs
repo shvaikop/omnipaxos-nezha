@@ -7,6 +7,19 @@
 use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) struct ClockConfig {
+    /// Maximum synchronization uncertainty in microseconds.
+    pub(crate) clock_uncertainty: u64,
+    /// Drift in microseconds per second.
+    pub(crate) clock_drift: i64,
+    /// Synchronization period in microseconds.
+    pub(crate) clock_sync_interval: u64,
+}
+
+// pub(crate) struct InternalStorageConfig {
+//     pub(crate) batch_size: usize,
+// }
+
 /// Simulated clock used for clock-assisted consensus experiments.
 pub struct Clock {
     /// Drift in microseconds per second.
@@ -31,19 +44,14 @@ pub struct Clock {
 }
 
 impl Clock {
-    /// Creates a new simulated clock instance.
-    pub fn new(
-        drift_us_per_sec: i64,
-        sync_interval_us: u64,
-        sync_uncertainty_us: u64,
-    ) -> Self {
+    pub(crate) fn with(config: ClockConfig) -> Self {
         let real_now = Self::hardware_time_us();
-        let base_now = Self::apply_sync_uncertainty(real_now, sync_uncertainty_us);
+        let base_now = Self::apply_sync_uncertainty(real_now, config.clock_uncertainty);
 
         Self {
-            drift_us_per_sec,
-            sync_interval_us,
-            sync_uncertainty_us,
+            drift_us_per_sec: config.clock_drift,
+            sync_interval_us: config.clock_sync_interval,
+            sync_uncertainty_us: config.clock_uncertainty,
             last_sync_real_time_us: real_now,
             base_clock_time_us: base_now,
             last_returned_time_us: base_now,
@@ -114,8 +122,7 @@ impl Clock {
         }
 
         let mut rng = rand::thread_rng();
-        let offset =
-            rng.gen_range(-(sync_uncertainty_us as i64)..=(sync_uncertainty_us as i64));
+        let offset = rng.gen_range(-(sync_uncertainty_us as i64)..=(sync_uncertainty_us as i64));
 
         if offset >= 0 {
             real_time_us.saturating_add(offset as u64)
@@ -125,16 +132,21 @@ impl Clock {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
+    use crate::clock::ClockConfig;
+
     use super::Clock;
     use std::{thread, time::Duration};
 
     /// Test that the clock never goes backwards.
     #[test]
     fn clock_is_monotonic() {
-        let mut clock = Clock::new(0, 10_000_000, 0);
+        let mut clock = Clock::with(ClockConfig {
+            clock_uncertainty: 0,
+            clock_drift: 0,
+            clock_sync_interval: 10_000_000,
+        });
 
         let t1 = clock.now_us();
         let t2 = clock.now_us();
@@ -147,7 +159,11 @@ mod tests {
     /// Test that time increases over real time.
     #[test]
     fn clock_progresses_over_time() {
-        let mut clock = Clock::new(0, 10_000_000, 0);
+        let mut clock = Clock::with(ClockConfig {
+            clock_uncertainty: 0,
+            clock_drift: 0,
+            clock_sync_interval: 10_000_000,
+        });
 
         let t1 = clock.now_us();
 
@@ -161,8 +177,16 @@ mod tests {
     /// Test that drift affects the clock rate.
     #[test]
     fn clock_with_drift_runs_faster() {
-        let mut normal_clock = Clock::new(0, 10_000_000, 0);
-        let mut drifted_clock = Clock::new(100_000, 10_000_000, 0);
+        let mut normal_clock = Clock::with(ClockConfig {
+            clock_uncertainty: 0,
+            clock_drift: 0,
+            clock_sync_interval: 10_000_000,
+        });
+        let mut drifted_clock = Clock::with(ClockConfig {
+            clock_uncertainty: 0,
+            clock_drift: 100_000,
+            clock_sync_interval: 10_000_000,
+        });
 
         let start_normal = normal_clock.now_us();
         let start_drifted = drifted_clock.now_us();
