@@ -1,5 +1,4 @@
 use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::LeaderState};
-use crate::util::LogEntry;
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
     },
     ClusterConfig, CompactionErr, OmniPaxosConfig, ProposeErr,
 };
+use crate::{clock::ClockConfig, util::LogEntry};
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
 use std::{
@@ -105,6 +105,11 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
+        let clock_config = ClockConfig {
+            clock_uncertainty: config.clock_uncertainty,
+            clock_drift: config.clock_drift,
+            clock_sync_interval: config.clock_sync_interval,
+        };
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -122,7 +127,7 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
-            clock: Clock::new(50, 10_000_000, 200),
+            clock: Clock::with(clock_config),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
@@ -794,6 +799,9 @@ pub(crate) enum Role {
 /// * `flexible_quorum` : Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
 /// * `buffer_size`: The buffer size for outgoing messages.
 /// * `batch_size`: The size of the buffer for log batching. The default is 1, which means no batching.
+/// * `clock_uncertainty`: Maximum clock uncertainty in microseconds upon re-synchronization.
+/// * `clock_drift`: Clock drift in microseconds per second.
+/// * `clock_sync_interval`: Clock synchronization interval in microseconds. The default is 1_000_000 (1 second).
 /// * `logger_file_path`: The path where the default logger logs events.
 #[derive(Clone, Debug)]
 pub(crate) struct SequencePaxosConfig {
@@ -802,6 +810,9 @@ pub(crate) struct SequencePaxosConfig {
     buffer_size: usize,
     pub(crate) batch_size: usize,
     flexible_quorum: Option<FlexibleQuorum>,
+    clock_uncertainty: u64,
+    clock_drift: i64,
+    clock_sync_interval: u64,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
@@ -823,6 +834,9 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             flexible_quorum: config.cluster_config.flexible_quorum,
             buffer_size: config.server_config.buffer_size,
             batch_size: config.server_config.batch_size,
+            clock_uncertainty: config.server_config.clock_uncertainty,
+            clock_drift: config.server_config.clock_drift,
+            clock_sync_interval: config.server_config.clock_sync_interval,
             #[cfg(feature = "logging")]
             logger_file_path: config.server_config.logger_file_path,
             #[cfg(feature = "logging")]
@@ -1514,7 +1528,7 @@ mod tests {
             // committed_id should still be 1 since rid2 is not fully committed yet
             assert_eq!(paxos.get_committed_idx(), 1);
         }
-        
+
         // reach full quorum for rid2 and check committed_id advances to 2
         paxos.handle_slow_reply(
             SlowReply {
