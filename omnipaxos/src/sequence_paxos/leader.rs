@@ -157,6 +157,7 @@ where
                         sent: self.clock.now_us(),  // we do not really use sent_time
                     };
                     self.late_buffer.insert((deadline, request_id), prep);
+                    self.req_id_to_late_buffer_deadline.insert(request_id, deadline);
                     #[cfg(feature = "logging")]
                     trace!(self.logger, "Moved request: {:?} from buffered_proposals to late_buffer", request_id);
                 }

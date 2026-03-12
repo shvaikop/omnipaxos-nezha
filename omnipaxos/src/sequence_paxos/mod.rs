@@ -58,7 +58,10 @@ where
     // Nezha attributes
     clock: Clock,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
+    // `late_buffer` key is (request_deadline, request_id)
     late_buffer: BTreeMap<(u64, RequestId), PrepareWithDeadline<T>>,
+    // keeping a map from request_id to deadline to be able to construct `late_buffer` key if deadline on entry is modified
+    req_id_to_late_buffer_deadline: HashMap<RequestId, u64>,
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<(NodeId, usize)>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional (Leader NodeId, commit_idx) that sent FastReply)>
     committed: HashMap<RequestId, bool>,
@@ -131,6 +134,7 @@ where
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
+            req_id_to_late_buffer_deadline: HashMap::new(),
             reply_set: HashMap::new(),
             committed: HashMap::new(),
             committed_idx: 0,
@@ -419,6 +423,7 @@ where
             let deadline = prep.entry.get_deadline();
             let request_id = prep.entry.get_request_id();
             self.late_buffer.insert((deadline, request_id), prep);
+            self.req_id_to_late_buffer_deadline.insert(request_id, deadline);
         }
     }
 
@@ -438,6 +443,7 @@ where
                 prep.entry
                     .set_deadline(self.last_released_deadline + 1 + i as u64);
                 self.early_buffer.push(Reverse(prep));
+                self.req_id_to_late_buffer_deadline.remove(&_request_id);
             }
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {

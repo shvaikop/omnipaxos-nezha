@@ -402,11 +402,11 @@ where
                 .replace_entry(modification.log_id, modification.entry.clone())
                 .expect(WRITE_ERROR_MSG);
             // delete the new entry from late_buffer if it is there
-            let late_key = (
-                modification.entry.get_deadline(),
-                modification.entry.get_request_id(),
-            );
-            self.late_buffer.remove(&late_key);
+            let request_id = modification.entry.get_request_id();
+            if let Some(&deadline) = self.req_id_to_late_buffer_deadline.get(&request_id) {
+                let late_key = (deadline, request_id);
+                self.late_buffer.remove(&late_key);
+            }
         }
     }
 
@@ -418,11 +418,11 @@ where
 
         // remove the entries that were added from the late buffer
         for modification in modifications {
-            let late_key = (
-                modification.entry.get_deadline(),
-                modification.entry.get_request_id(),
-            );
-            self.late_buffer.remove(&late_key);
+            let request_id = modification.entry.get_request_id();
+            if let Some(&deadline) = self.req_id_to_late_buffer_deadline.get(&request_id) {
+                let late_key = (deadline, request_id);
+                self.late_buffer.remove(&late_key);
+            }
         }
     }
 
@@ -762,6 +762,7 @@ mod tests {
                 sent: 0,
             },
         );
+        paxos.req_id_to_late_buffer_deadline.insert(replacement.request_id, replacement.deadline);
 
         let modifications = build_modifications(0, vec![replacement]);
 
@@ -845,6 +846,8 @@ mod tests {
                 sent: 0,
             },
         );
+        paxos.req_id_to_late_buffer_deadline.insert(new_entry_1.request_id, new_entry_1.deadline);
+        paxos.req_id_to_late_buffer_deadline.insert(new_entry_2.request_id, new_entry_2.deadline);
 
         let modifications = build_modifications(0, vec![existing, new_entry_1, new_entry_2]);
 
