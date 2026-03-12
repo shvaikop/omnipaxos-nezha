@@ -441,7 +441,7 @@ where
             }
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
-            if prep.entry.get_deadline() < self.clock.now_us() {
+            if prep.entry.get_deadline() < self.clock.now_us_low() {
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
@@ -675,8 +675,8 @@ where
     }
 
     fn propose_entry(&mut self, mut entry: T) {
-        // TODO: Currently using a constant 100 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
-        entry.set_deadline(self.clock.now_us() + 100);
+        // TODO: Currently using a constant 400 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
+        entry.set_deadline(self.clock.now_us_hi() + 400);
         entry.set_request_id(RequestId::new_v4());
         entry.set_nezha_proxy_id(self.pid);
 
