@@ -79,6 +79,16 @@ impl Clock {
         monotonic_time
     }
 
+    /// Returns the lower bound of the current clock time considering synchronization uncertainty.
+    pub fn now_us_low(&mut self) -> u64 {
+        self.now_us() - self.sync_uncertainty_us
+    }
+
+    /// Returns the upper bound of the current clock time considering synchronization uncertainty.
+    pub fn now_us_hi(&mut self) -> u64 {
+        self.now_us() + self.sync_uncertainty_us
+    }
+
     /// Returns the current synchronization uncertainty in microseconds.
     pub fn uncertainty_us(&self) -> u64 {
         self.sync_uncertainty_us

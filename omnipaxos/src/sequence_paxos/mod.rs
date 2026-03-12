@@ -441,7 +441,7 @@ where
             }
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
-            if prep.entry.get_deadline() < self.clock.now_us() + self.clock.uncertainty_us() {
+            if prep.entry.get_deadline() < self.clock.now_us_low() {
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
