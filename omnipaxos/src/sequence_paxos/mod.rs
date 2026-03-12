@@ -534,10 +534,6 @@ where
 
     pub(crate) fn handle_slow_reply(&mut self, sreply: SlowReply, from: NodeId) {
         if self.state.1 != Phase::Accept
-            || self
-                .reply_set
-                .get(&sreply.request_id)
-                .is_some_and(|(replies, _)| replies.contains_key(&from))
         {
             #[cfg(feature = "logging")]
             trace!(self.logger, "Ignoring SlowReply"; "from" => from, "request_id" => ?sreply.request_id, "ballot" => ?sreply.n);
@@ -550,6 +546,7 @@ where
             .entry(request_id)
             .or_insert_with(|| (HashMap::new(), None));
 
+        // We might be overwriting a FastReply here but that is expected
         entry.0.insert(from, NezhaReply::Slow(sreply));
         #[cfg(feature = "logging")]
         trace!(self.logger, "SlowReply recorded"; "from" => from, "request_id" => ?request_id);
