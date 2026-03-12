@@ -257,6 +257,8 @@ pub mod sequence_paxos {
         pub n: Ballot,
         /// Highest log index that the leader has committed
         pub commit_point: usize,
+        /// The sent timestamp of this message, used for calculating stats about the half RTT time
+        pub sent: Timestamp,
     }
 
     /// Broadcast by the leader so followers can adjust their log entry at log_id.

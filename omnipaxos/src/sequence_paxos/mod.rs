@@ -4,7 +4,7 @@ use crate::util::LogEntry;
 use crate::utils::logger::create_logger;
 use crate::{
     clock::Clock,
-    messages::Message,
+    messages::{Message, Timestamp},
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
         Entry, Snapshot, StopSign, Storage,
@@ -35,6 +35,19 @@ pub struct NezhaStats {
     pub slow_path_commits: u64,
 }
 
+/// Information about observed half-RTT samples coming from CommitStatus messages
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HalfRttStats {
+    /// Mean (microseconds) across the collected half-RTT samples
+    pub mean: f64,
+    /// Median across the collected half-RTT samples
+    pub median: f64,
+    /// Sample standard deviation (microseconds) across the collected half-RTT samples
+    pub std_dev: f64,
+}
+
+const HALF_RTT_STATS_INTERVAL_US: Timestamp = 5_000_000;
+
 /// a Sequence Paxos replica. Maintains local state of the replicated log, handles incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
 /// User also has to periodically fetch the decided entries that are guaranteed to be strongly consistent and linearizable, and therefore also safe to be used in the higher level application.
 /// If snapshots are not desired to be used, use `()` for the type parameter `S`.
@@ -64,6 +77,9 @@ where
     committed: HashMap<RequestId, bool>,
     committed_idx: usize,
     nezha_stats: NezhaStats,
+    half_rtt_samples: Vec<f64>,
+    last_half_rtt_report: Timestamp,
+    latest_half_rtt_stats: Option<HalfRttStats>,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -105,6 +121,8 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
+        let clock = Clock::new();
+        let last_half_rtt_report = clock.now_us();
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -122,7 +140,7 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
-            clock: Clock::new(),
+            clock,
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
@@ -130,6 +148,9 @@ where
             committed: HashMap::new(),
             committed_idx: 0,
             nezha_stats: NezhaStats::default(),
+            half_rtt_samples: Vec::new(),
+            last_half_rtt_report,
+            latest_half_rtt_stats: None,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -170,6 +191,33 @@ where
 
     pub(crate) fn get_promise(&self) -> Ballot {
         self.internal_storage.get_promise()
+    }
+
+    fn record_half_rtt_sample(&mut self, half_rtt_us: f64) {
+        self.half_rtt_samples.push(half_rtt_us);
+        let now = self.clock.now_us();
+        self.refresh_half_rtt_stats_if_due(now);
+    }
+
+    fn refresh_half_rtt_stats_if_due(&mut self, now: Timestamp) {
+        if now.saturating_sub(self.last_half_rtt_report) < HALF_RTT_STATS_INTERVAL_US {
+            return;
+        }
+
+        self.latest_half_rtt_stats = HalfRttStats::compute_stats(&self.half_rtt_samples);
+        self.last_half_rtt_report = now;
+
+        #[cfg(feature = "logging")]
+        if let Some(stats) = self.latest_half_rtt_stats {
+            info!(
+                self.logger,
+                "Half-RTT stats updated";
+                "mean_us" => stats.mean,
+                "median_us" => stats.median,
+                "std_dev_us" => stats.std_dev,
+                "samples" => self.half_rtt_samples.len()
+            );
+        }
     }
 
     /// Initiates the trim process.
@@ -436,7 +484,7 @@ where
             }
         }
         while let Some(Reverse(prep)) = self.early_buffer.peek().cloned() {
-            if prep.entry.get_deadline() < self.clock.now_us() {
+            if prep.entry.get_deadline() < self.clock.now_us() + self.clock.uncertainty_us() {
                 self.early_buffer.pop();
                 self.last_released_deadline = prep.entry.get_deadline();
 
@@ -770,6 +818,48 @@ where
             sync_idx,
             stopsign: self.internal_storage.get_stopsign(),
         }
+    }
+}
+
+impl HalfRttStats {
+    fn compute_stats(samples: &[f64]) -> Option<Self> {
+        if samples.is_empty() {
+            return None;
+        }
+
+        // Calculate the mean for the samples
+        let len = samples.len();
+        let sum: f64 = samples.iter().copied().sum();
+        let mean = sum / len as f64;
+
+        // Compute the median
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = if len % 2 == 0 {
+            (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+        } else {
+            sorted[len / 2]
+        };
+
+        // Calculate the standard deviation
+        let mut variance = 0.0;
+        if len > 1 {
+            variance = samples
+                .iter()
+                .map(|sample| {
+                    let diff = sample - mean;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / (len as f64 - 1.0);
+        }
+        let std_dev = variance.sqrt();
+
+        Some(Self {
+            mean,
+            median,
+            std_dev,
+        })
     }
 }
 
@@ -1514,7 +1604,7 @@ mod tests {
             // committed_id should still be 1 since rid2 is not fully committed yet
             assert_eq!(paxos.get_committed_idx(), 1);
         }
-        
+
         // reach full quorum for rid2 and check committed_id advances to 2
         paxos.handle_slow_reply(
             SlowReply {

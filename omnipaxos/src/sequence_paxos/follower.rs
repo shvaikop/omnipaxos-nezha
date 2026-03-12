@@ -523,6 +523,11 @@ where
             return;
         }
 
+        let now = self.clock.now_us();
+        let rtt = now.saturating_sub(cs.sent);
+        let half_rtt = rtt as f64 / 2.0;
+        self.record_half_rtt_sample(half_rtt);
+
         let curr_accepted_idx = self.internal_storage.get_accepted_idx();
         if curr_accepted_idx < cs.commit_point {
             #[cfg(feature = "logging")]

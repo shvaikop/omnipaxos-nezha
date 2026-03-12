@@ -527,6 +527,7 @@ where
         let commit_status = CommitStatus {
             n: self.internal_storage.get_promise(),
             commit_point: self.internal_storage.get_decided_idx(),
+            sent: self.clock.now_us(),
         };
         #[cfg(feature = "logging")]
         debug!(
