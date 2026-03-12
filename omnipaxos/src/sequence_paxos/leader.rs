@@ -88,7 +88,7 @@ where
         if !self.accepted_reconfiguration() {
             match self.state {
                 (Role::Leader, Phase::Prepare) => self.buffered_proposals.append(&mut entries),
-                (Role::Leader, Phase::Accept) => self.accept_entries_leader(entries),
+                (Role::Leader, Phase::Accept) => self.process_buffered_proposals(entries),
                 _ => self.forward_proposals(entries),
             }
         }
@@ -132,6 +132,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn accept_entries_leader(&mut self, entries: Vec<T>) {
         let accepted_metadata = self
             .internal_storage
@@ -141,6 +142,28 @@ where
             self.leader_state
                 .set_accepted_idx(self.pid, metadata.accepted_idx);
             self.send_acceptdecide(metadata);
+        }
+    }
+
+    fn process_buffered_proposals(&mut self, entries: Vec<T>) {
+        match self.state {
+            (Role::Leader, Phase::Accept) => {
+                for entry in entries {
+                    let deadline = entry.get_deadline();
+                    let request_id = entry.get_request_id();
+                    let prep = PrepareWithDeadline {
+                        from: entry.get_nezha_proxy_id(),
+                        entry,
+                        sent: self.clock.now_us(),  // we do not really use sent_time
+                    };
+                    self.late_buffer.insert((deadline, request_id), prep);
+                    #[cfg(feature = "logging")]
+                    trace!(self.logger, "Moved request: {:?} from buffered_proposals to late_buffer", request_id);
+                }
+            }
+            (Role::Leader, _) => self.buffered_proposals.extend(entries),
+            // Proposals were forwarded to node but it is no longer a leader
+            _ => self.forward_proposals(entries),
         }
     }
 
@@ -273,13 +296,13 @@ where
             .internal_storage
             .sync_log(self.leader_state.n_leader, decided_idx, max_promise_sync)
             .expect(WRITE_ERROR_MSG);
+
+        // we have to switch to Accept phase before processing `buffered_proposals`
+        self.state = (Role::Leader, Phase::Accept);
         if !self.accepted_reconfiguration() {
             if !self.buffered_proposals.is_empty() {
                 let entries = std::mem::take(&mut self.buffered_proposals);
-                new_accepted_idx = self
-                    .internal_storage
-                    .append_entries_without_batching(entries, true)
-                    .expect(WRITE_ERROR_MSG);
+                self.process_buffered_proposals(entries);
             }
             if let Some(ss) = self.buffered_stopsign.take() {
                 self.internal_storage
@@ -288,7 +311,6 @@ where
                 new_accepted_idx = self.internal_storage.get_accepted_idx();
             }
         }
-        self.state = (Role::Leader, Phase::Accept);
         self.leader_state
             .set_accepted_idx(self.pid, new_accepted_idx);
         for pid in self.leader_state.get_promised_followers() {
