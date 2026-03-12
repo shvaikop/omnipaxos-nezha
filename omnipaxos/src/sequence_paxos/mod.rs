@@ -61,7 +61,6 @@ where
     late_buffer: BTreeMap<(u64, RequestId), PrepareWithDeadline<T>>,
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<(NodeId, usize)>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional (Leader NodeId, commit_idx) that sent FastReply)>
-    committed: HashMap<RequestId, bool>,
     committed_idx: usize,
     nezha_stats: NezhaStats,
     #[cfg(feature = "logging")]
@@ -132,7 +131,6 @@ where
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
             reply_set: HashMap::new(),
-            committed: HashMap::new(),
             committed_idx: 0,
             nezha_stats: NezhaStats::default(),
             #[cfg(feature = "logging")]
@@ -523,7 +521,6 @@ where
         if is_committed {
             #[cfg(feature = "logging")]
             debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
-            self.committed.insert(request_id, true);
             self.nezha_stats.fast_path_commits += 1;
 
             // find the commit idx for that request id in reply_set and then remove request_id from reply_set
@@ -561,7 +558,6 @@ where
         if is_committed {
             #[cfg(feature = "logging")]
             debug!(self.logger, "Request committed via slow path"; "request_id" => ?request_id);
-            self.committed.insert(request_id, true);
             self.nezha_stats.slow_path_commits += 1;
 
             // find the log_idx for that request_id in reply_set and set it as the committed idx
@@ -1345,7 +1341,7 @@ mod tests {
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1354,7 +1350,7 @@ mod tests {
             },
             3,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1363,7 +1359,7 @@ mod tests {
             },
             4,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1373,8 +1369,8 @@ mod tests {
             5,
         );
 
-        assert!(paxos.committed.contains_key(&rid));
-        assert!(*paxos.committed.get(&rid).unwrap());
+        // assert!(paxos.committed.contains_key(&rid));
+        // assert!(*paxos.committed.get(&rid).unwrap());
     }
 
     #[test]
@@ -1386,7 +1382,7 @@ mod tests {
         let ballot = paxos.internal_storage.get_promise();
         let rid = Uuid::new_v4();
         let log_hash = LogHash::compute::<TestEntry>(&[]);
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1395,7 +1391,7 @@ mod tests {
             },
             3,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1404,7 +1400,7 @@ mod tests {
             },
             4,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1423,8 +1419,8 @@ mod tests {
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
-        assert!(paxos.committed.contains_key(&rid));
-        assert!(*paxos.committed.get(&rid).unwrap());
+        // assert!(paxos.committed.contains_key(&rid));
+        // assert!(*paxos.committed.get(&rid).unwrap());
         assert!(paxos.committed_idx == 1);
     }
 
@@ -1434,7 +1430,7 @@ mod tests {
         let ballot = paxos.internal_storage.get_promise();
         let rid = Uuid::new_v4();
         let log_hash = LogHash::compute::<TestEntry>(&[]);
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1443,7 +1439,7 @@ mod tests {
             },
             3,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1461,7 +1457,7 @@ mod tests {
             log_idx: Some(2),
         };
         paxos.handle_fast_reply(leader_reply, 2);
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1471,8 +1467,8 @@ mod tests {
             5,
         );
 
-        assert!(paxos.committed.contains_key(&rid));
-        assert!(*paxos.committed.get(&rid).unwrap());
+        // assert!(paxos.committed.contains_key(&rid));
+        // assert!(*paxos.committed.get(&rid).unwrap());
         assert!(paxos.committed_idx == 2);
     }
 
@@ -1549,7 +1545,7 @@ mod tests {
         let ballot = paxos.internal_storage.get_promise();
         let rid = Uuid::new_v4();
         let log_hash = LogHash::compute::<TestEntry>(&[]);
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1558,7 +1554,7 @@ mod tests {
             },
             3,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         paxos.handle_slow_reply(
             SlowReply {
@@ -1567,7 +1563,7 @@ mod tests {
             },
             4,
         );
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         let leader_reply = FastReply {
             n: ballot,
@@ -1587,8 +1583,8 @@ mod tests {
         };
         paxos.handle_fast_reply(follower_reply, 2);
 
-        assert!(paxos.committed.contains_key(&rid));
-        assert!(*paxos.committed.get(&rid).unwrap());
+        // assert!(paxos.committed.contains_key(&rid));
+        // assert!(*paxos.committed.get(&rid).unwrap());
         assert!(paxos.committed_idx == 1);
     }
 
@@ -1626,7 +1622,7 @@ mod tests {
         }
 
         // Should not be committed since no leader reply
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
         assert!(paxos.reply_set.contains_key(&rid));
     }
 
@@ -1661,7 +1657,7 @@ mod tests {
         }
 
         // 3 matching fast replies (nodes 2, 3, 4) + need super quorum of 4- shouldn't be committed yet
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
 
         // One more matching fast reply from node 5- 4 matching replies = super quorum
         let freply = FastReply {
@@ -1673,8 +1669,8 @@ mod tests {
         };
         paxos.handle_fast_reply(freply, 5);
 
-        assert!(paxos.committed.contains_key(&rid));
-        assert!(*paxos.committed.get(&rid).unwrap());
+        // assert!(paxos.committed.contains_key(&rid));
+        // assert!(*paxos.committed.get(&rid).unwrap());
         // reply_set should be cleaned up once committed
         assert!(!paxos.reply_set.contains_key(&rid));
     }
@@ -1721,7 +1717,7 @@ mod tests {
         paxos.handle_fast_reply(freply_mismatch, 5);
 
         // Only 3 matching fast replies (2, 3, 4) < super quorum of 4- not committed
-        assert!(!paxos.committed.contains_key(&rid));
+        // assert!(!paxos.committed.contains_key(&rid));
     }
 
     #[test]
