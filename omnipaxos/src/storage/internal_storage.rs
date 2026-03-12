@@ -127,14 +127,14 @@ where
         let compacted_idx = self.get_compacted_idx();
         let accepted_idx = self.get_accepted_idx();
         // use to_idx-1 when getting the entry type as to_idx is exclusive
-        let to_type = match self.get_entry_type(to_idx - 1, compacted_idx, accepted_idx)? {
+        let to_type = match self.get_entry_type(to_idx - 1, compacted_idx, accepted_idx, committed_idx)? {
             Some(IndexEntry::Compacted) => {
                 return Ok(Some(vec![self.create_compacted_entry(compacted_idx)?]))
             }
             Some(from_type) => from_type,
             _ => return Ok(None),
         };
-        let from_type = match self.get_entry_type(from_idx, compacted_idx, accepted_idx)? {
+        let from_type = match self.get_entry_type(from_idx, compacted_idx, accepted_idx, committed_idx)? {
             Some(from_type) => from_type,
             _ => return Ok(None),
         };
@@ -185,13 +185,13 @@ where
         idx: usize,
         compacted_idx: usize,
         accepted_idx: usize,
+        committed_idx: Option<usize>,
     ) -> StorageResult<Option<IndexEntry>> {
         if idx < compacted_idx {
             Ok(Some(IndexEntry::Compacted))
         }
-        // TODO: handle committed entries using committed_idx rather than accepted_idx somehow- currently just treating all non-compacted entries as Entry type
-        // else if idx + 1 < accepted_idx {
-        else if true {
+        else if idx + 1 < accepted_idx ||
+            committed_idx.is_some() && idx < committed_idx.unwrap().max(self.get_decided_idx()) {
             Ok(Some(IndexEntry::Entry))
         } else if idx + 1 == accepted_idx {
             match self.get_stopsign() {
