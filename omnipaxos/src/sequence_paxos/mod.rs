@@ -121,8 +121,8 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
-        let clock = Clock::new();
-        let last_half_rtt_report = clock.now_us();
+        let mut stats_clock = Clock::new(0,0,0);
+        let last_half_rtt_report = stats_clock.now_us();
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -140,7 +140,7 @@ where
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
-            clock,
+            clock: Clock::new(50, 10_000_000, 200),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
             late_buffer: BTreeMap::new(),
