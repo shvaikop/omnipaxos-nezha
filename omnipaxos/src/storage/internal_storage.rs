@@ -96,14 +96,18 @@ where
     ) -> StorageResult<Option<Vec<LogEntry<T>>>> {
         let decided_idx = self.get_decided_idx();
         if from_idx < decided_idx {
-            self.read(from_idx..decided_idx)
+            self.read(from_idx..decided_idx, None) // committed_idx is not needed to read decided_suffix
         } else {
             Ok(None)
         }
     }
 
     /// Read entries in the range `r` in the log. Returns `None` if `r` is out of bounds.
-    pub(crate) fn read<R>(&self, r: R) -> StorageResult<Option<Vec<LogEntry<T>>>>
+    pub(crate) fn read<R>(
+        &self,
+        r: R,
+        committed_idx: Option<usize>,
+    ) -> StorageResult<Option<Vec<LogEntry<T>>>>
     where
         R: RangeBounds<usize>,
     {
@@ -123,23 +127,26 @@ where
         let compacted_idx = self.get_compacted_idx();
         let accepted_idx = self.get_accepted_idx();
         // use to_idx-1 when getting the entry type as to_idx is exclusive
-        let to_type = match self.get_entry_type(to_idx - 1, compacted_idx, accepted_idx)? {
+        let to_type = match self.get_entry_type(to_idx - 1, compacted_idx, accepted_idx, committed_idx)? {
             Some(IndexEntry::Compacted) => {
                 return Ok(Some(vec![self.create_compacted_entry(compacted_idx)?]))
             }
             Some(from_type) => from_type,
             _ => return Ok(None),
         };
-        let from_type = match self.get_entry_type(from_idx, compacted_idx, accepted_idx)? {
+        let from_type = match self.get_entry_type(from_idx, compacted_idx, accepted_idx, committed_idx)? {
             Some(from_type) => from_type,
             _ => return Ok(None),
         };
         match (from_type, to_type) {
-            (IndexEntry::Entry, IndexEntry::Entry) => {
-                Ok(Some(self.create_read_log_entries(from_idx, to_idx)?))
-            }
+            (IndexEntry::Entry, IndexEntry::Entry) => Ok(Some(self.create_read_log_entries(
+                from_idx,
+                to_idx,
+                committed_idx,
+            )?)),
             (IndexEntry::Entry, IndexEntry::StopSign(ss)) => {
-                let mut entries = self.create_read_log_entries(from_idx, to_idx - 1)?;
+                let mut entries =
+                    self.create_read_log_entries(from_idx, to_idx - 1, committed_idx)?;
                 entries.push(LogEntry::StopSign(ss, self.stopsign_is_decided()));
                 Ok(Some(entries))
             }
@@ -147,7 +154,7 @@ where
                 let mut entries = Vec::with_capacity(to_idx - compacted_idx + 1);
                 let compacted = self.create_compacted_entry(compacted_idx)?;
                 entries.push(compacted);
-                let mut e = self.create_read_log_entries(compacted_idx, to_idx)?;
+                let mut e = self.create_read_log_entries(compacted_idx, to_idx, committed_idx)?;
                 entries.append(&mut e);
                 Ok(Some(entries))
             }
@@ -155,7 +162,8 @@ where
                 let mut entries = Vec::with_capacity(to_idx - compacted_idx + 1);
                 let compacted = self.create_compacted_entry(compacted_idx)?;
                 entries.push(compacted);
-                let mut e = self.create_read_log_entries(compacted_idx, to_idx - 1)?;
+                let mut e =
+                    self.create_read_log_entries(compacted_idx, to_idx - 1, committed_idx)?;
                 entries.append(&mut e);
                 entries.push(LogEntry::StopSign(ss, self.stopsign_is_decided()));
                 Ok(Some(entries))
@@ -177,13 +185,13 @@ where
         idx: usize,
         compacted_idx: usize,
         accepted_idx: usize,
+        committed_idx: Option<usize>,
     ) -> StorageResult<Option<IndexEntry>> {
         if idx < compacted_idx {
             Ok(Some(IndexEntry::Compacted))
         }
-        // TODO: handle committed entries using committed_idx rather than accepted_idx somehow- currently just treating all non-compacted entries as Entry type
-        // else if idx + 1 < accepted_idx {
-        else if true {
+        else if idx + 1 < accepted_idx ||
+            committed_idx.is_some() && idx < committed_idx.unwrap().max(self.get_decided_idx()) {
             Ok(Some(IndexEntry::Entry))
         } else if idx + 1 == accepted_idx {
             match self.get_stopsign() {
@@ -195,7 +203,12 @@ where
         }
     }
 
-    fn create_read_log_entries(&self, from: usize, to: usize) -> StorageResult<Vec<LogEntry<T>>> {
+    fn create_read_log_entries(
+        &self,
+        from: usize,
+        to: usize,
+        committed_idx: Option<usize>,
+    ) -> StorageResult<Vec<LogEntry<T>>> {
         let decided_idx = self.get_decided_idx();
         let entries = self
             .get_entries(from, to)?
@@ -205,6 +218,8 @@ where
                 let log_idx = idx + from;
                 if log_idx < decided_idx {
                     LogEntry::Decided(e)
+                } else if committed_idx.is_some() && log_idx < committed_idx.unwrap() {
+                    LogEntry::Committed(e)
                 } else {
                     LogEntry::Undecided(e)
                 }

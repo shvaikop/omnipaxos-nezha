@@ -317,7 +317,10 @@ where
         match self
             .seq_paxos
             .internal_storage
-            .read(idx..idx + 1)
+            .read(
+                idx..idx + 1,
+                Option::from(self.seq_paxos.get_committed_idx()),
+            )
             .expect("storage error while trying to read log entries")
         {
             Some(mut v) => v.pop(),
@@ -332,7 +335,7 @@ where
     {
         self.seq_paxos
             .internal_storage
-            .read(r)
+            .read(r, Option::from(self.seq_paxos.get_committed_idx()))
             .expect("storage error while trying to read log entries")
     }
 

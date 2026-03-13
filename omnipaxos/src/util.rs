@@ -321,6 +321,8 @@ where
     /// This Sequence Paxos instance has been stopped for reconfiguration. The accompanying bool
     /// indicates whether the reconfiguration has been decided or not. If it is `true`, then the OmniPaxos instance for the new configuration can be started.
     StopSign(StopSign, bool),
+    /// The entry is committed in the fast-path
+    Committed(T),
 }
 
 impl<T: PartialEq + Entry> PartialEq for LogEntry<T>

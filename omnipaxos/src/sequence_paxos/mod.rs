@@ -334,7 +334,7 @@ where
 
         let committed_suffix = self
             .internal_storage
-            .read(from_idx..committed_idx)
+            .read(from_idx..committed_idx, Option::from(self.committed_idx))
             .expect("storage error while trying to read committed log suffix");
 
         if committed_suffix.is_none() {
