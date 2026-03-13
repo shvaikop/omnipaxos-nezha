@@ -149,14 +149,13 @@ where
         match self.state {
             (Role::Leader, Phase::Accept) => {
                 for entry in entries {
-                    let deadline = entry.get_deadline();
                     let request_id = entry.get_request_id();
                     let prep = PrepareWithDeadline {
                         from: entry.get_nezha_proxy_id(),
                         entry,
                         sent: self.clock.now_us(),  // we do not really use sent_time
                     };
-                    self.late_buffer.insert((deadline, request_id), prep);
+                    self.late_buffer.insert(request_id, prep);
                     #[cfg(feature = "logging")]
                     trace!(self.logger, "Moved request: {:?} from buffered_proposals to late_buffer", request_id);
                 }

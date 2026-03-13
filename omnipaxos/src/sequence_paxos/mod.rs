@@ -18,7 +18,7 @@ use crate::{clock::ClockConfig, util::LogEntry};
 use slog::{debug, info, trace, warn, Logger};
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap},
     fmt::Debug,
     vec,
 };
@@ -58,7 +58,7 @@ where
     // Nezha attributes
     clock: Clock,
     last_released_deadline: u64, // TODO: use correct type for clock simulator
-    late_buffer: BTreeMap<(u64, RequestId), PrepareWithDeadline<T>>,
+    late_buffer: HashMap<RequestId, PrepareWithDeadline<T>>,
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     reply_set: HashMap<RequestId, (HashMap<NodeId, NezhaReply>, Option<(NodeId, usize)>)>, // Map<RequestId, (Map<NodeId, NezhaReply>, Optional (Leader NodeId, commit_idx) that sent FastReply)>
     committed: HashMap<RequestId, bool>,
@@ -130,7 +130,7 @@ where
             clock: Clock::with(clock_config),
             early_buffer: BinaryHeap::new(),
             last_released_deadline: 0,
-            late_buffer: BTreeMap::new(),
+            late_buffer: HashMap::new(),
             reply_set: HashMap::new(),
             committed: HashMap::new(),
             committed_idx: 0,
@@ -416,9 +416,8 @@ where
         } else {
             #[cfg(feature = "logging")]
             trace!(self.logger, "PrepareWithDeadline buffered in late_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
-            let deadline = prep.entry.get_deadline();
             let request_id = prep.entry.get_request_id();
-            self.late_buffer.insert((deadline, request_id), prep);
+            self.late_buffer.insert(request_id, prep);
         }
     }
 
@@ -428,15 +427,15 @@ where
             return;
         }
         if !self.late_buffer.is_empty() && self.state.0 == Role::Leader {
-            // Transfer requests from the late buffer to the early buffer
-            for (i, ((_deadline, _request_id), mut prep)) in std::mem::take(&mut self.late_buffer)
-                .into_iter()
-                .enumerate()
-            {
+            let mut late_entries: Vec<_> = std::mem::take(&mut self.late_buffer)
+                .into_values()
+                .collect();
+            late_entries.sort_by_key(|prep| prep.entry.get_deadline());
+            for (i, mut prep) in late_entries.into_iter().enumerate() {
                 // Modify the deadline to be eligible for early buffer
                 // Each deadline will be different by 1us (not necessary, avoids having the same deadlines in the log)
                 prep.entry
-                    .set_deadline(self.last_released_deadline + 1 + i as u64);
+                    .set_deadline(self.last_released_deadline.saturating_add(1 + (i as u64)));
                 self.early_buffer.push(Reverse(prep));
             }
         }
@@ -1007,7 +1006,7 @@ mod tests {
 
         assert!(paxos.early_buffer.is_empty());
         assert_eq!(paxos.late_buffer.len(), 1);
-        assert!(paxos.late_buffer.contains_key(&(30, rid)));
+        assert!(paxos.late_buffer.contains_key(&rid));
     }
 
     #[test]
@@ -1087,7 +1086,7 @@ mod tests {
         let rid1 = Uuid::new_v4();
         let rid2 = Uuid::new_v4();
         paxos.late_buffer.insert(
-            (5, rid1),
+            rid1,
             PrepareWithDeadline {
                 from: 2,
                 entry: TestEntry::new(1, rid1, 5),
@@ -1095,7 +1094,7 @@ mod tests {
             },
         );
         paxos.late_buffer.insert(
-            (6, rid2),
+            rid2,
             PrepareWithDeadline {
                 from: 3,
                 entry: TestEntry::new(2, rid2, 6),
@@ -1125,7 +1124,7 @@ mod tests {
 
         let rid = Uuid::new_v4();
         paxos.late_buffer.insert(
-            (5, rid),
+            rid,
             PrepareWithDeadline {
                 from: 2,
                 entry: TestEntry::new(1, rid, 5),
@@ -1136,7 +1135,7 @@ mod tests {
         paxos.process_early_buffer();
 
         assert_eq!(paxos.late_buffer.len(), 1);
-        assert!(paxos.late_buffer.contains_key(&(5, rid)));
+        assert!(paxos.late_buffer.contains_key(&rid));
         assert!(paxos.early_buffer.is_empty());
     }
 
