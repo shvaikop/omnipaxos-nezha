@@ -402,11 +402,7 @@ where
                 .replace_entry(modification.log_id, modification.entry.clone())
                 .expect(WRITE_ERROR_MSG);
             // delete the new entry from late_buffer if it is there
-            let late_key = (
-                modification.entry.get_deadline(),
-                modification.entry.get_request_id(),
-            );
-            self.late_buffer.remove(&late_key);
+            self.late_buffer.remove(&modification.entry.get_request_id());
         }
     }
 
@@ -418,11 +414,7 @@ where
 
         // remove the entries that were added from the late buffer
         for modification in modifications {
-            let late_key = (
-                modification.entry.get_deadline(),
-                modification.entry.get_request_id(),
-            );
-            self.late_buffer.remove(&late_key);
+            self.late_buffer.remove(&modification.entry.get_request_id());
         }
     }
 
@@ -753,9 +745,8 @@ mod tests {
         paxos.state = (Role::Follower, Phase::Accept);
 
         let replacement = TestEntry::new(99, Uuid::new_v4(), 30);
-        let late_key = (replacement.deadline, replacement.request_id);
         paxos.late_buffer.insert(
-            late_key,
+            replacement.request_id,
             PrepareWithDeadline {
                 from: 2,
                 entry: replacement.clone(),
@@ -763,11 +754,11 @@ mod tests {
             },
         );
 
-        let modifications = build_modifications(0, vec![replacement]);
+        let modifications = build_modifications(0, vec![replacement.clone()]);
 
         paxos.handle_log_modifications(modifications);
 
-        assert!(!paxos.late_buffer.contains_key(&late_key));
+        assert!(!paxos.late_buffer.contains_key(&replacement.request_id));
         assert!(paxos.late_buffer.is_empty());
     }
 
@@ -816,13 +807,10 @@ mod tests {
 
         let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
         let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
-        let late_key_1 = (new_entry_1.deadline, new_entry_1.request_id);
-        let late_key_2 = (new_entry_2.deadline, new_entry_2.request_id);
         let unrelated = TestEntry::new(4, Uuid::new_v4(), 44);
-        let unrelated_key = (unrelated.deadline, unrelated.request_id);
 
         paxos.late_buffer.insert(
-            late_key_1,
+            new_entry_1.request_id,
             PrepareWithDeadline {
                 from: 2,
                 entry: new_entry_1.clone(),
@@ -830,7 +818,7 @@ mod tests {
             },
         );
         paxos.late_buffer.insert(
-            late_key_2,
+            new_entry_2.request_id,
             PrepareWithDeadline {
                 from: 2,
                 entry: new_entry_2.clone(),
@@ -838,21 +826,21 @@ mod tests {
             },
         );
         paxos.late_buffer.insert(
-            unrelated_key,
+            unrelated.request_id,
             PrepareWithDeadline {
                 from: 2,
-                entry: unrelated,
+                entry: unrelated.clone(),
                 sent: 0,
             },
         );
 
-        let modifications = build_modifications(0, vec![existing, new_entry_1, new_entry_2]);
+        let modifications = build_modifications(0, vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()]);
 
         paxos.handle_log_modifications(modifications);
 
-        assert!(!paxos.late_buffer.contains_key(&late_key_1));
-        assert!(!paxos.late_buffer.contains_key(&late_key_2));
-        assert!(paxos.late_buffer.contains_key(&unrelated_key));
+        assert!(!paxos.late_buffer.contains_key(&new_entry_1.request_id));
+        assert!(!paxos.late_buffer.contains_key(&new_entry_2.request_id));
+        assert!(paxos.late_buffer.contains_key(&unrelated.request_id));
         assert_eq!(paxos.late_buffer.len(), 1);
     }
 
