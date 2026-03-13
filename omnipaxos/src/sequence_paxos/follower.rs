@@ -808,7 +808,6 @@ mod tests {
         let new_entry_1 = TestEntry::new(2, Uuid::new_v4(), 22);
         let new_entry_2 = TestEntry::new(3, Uuid::new_v4(), 33);
         let unrelated = TestEntry::new(4, Uuid::new_v4(), 44);
-        let unrelated_key = (unrelated.deadline, unrelated.request_id);
 
         paxos.late_buffer.insert(
             new_entry_1.request_id,
