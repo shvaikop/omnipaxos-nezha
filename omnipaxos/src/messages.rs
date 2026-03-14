@@ -170,8 +170,9 @@ pub mod sequence_paxos {
     {
         /// The entry to be proposed for replication
         pub entry: T,
-        /// The timestamp when the message is sent
-        pub sent: Timestamp,
+        /// This field stores the sent time before it reaches the receiver
+        ///   the receiver stores the one-way-delay in it to later send it back in `FastReply`
+        pub time_us_sent_or_owd: Option<u64>,
     }
 
     /// Implement ordering traits for PrepareWithDeadline so it can be stored in a BinaryHeap for the early_buffer, ordered by deadline
@@ -218,6 +219,8 @@ pub mod sequence_paxos {
         pub is_leader: bool,
         /// The commit point sent by leader
         pub log_idx: Option<usize>,
+        /// The measured one-way-delay calculated based on `seived time
+        pub one_way_delay: Option<u64>,
     }
 
     /// Slow path reply from both leaders and followers to proxy

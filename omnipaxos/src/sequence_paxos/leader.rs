@@ -152,7 +152,7 @@ where
                     let request_id = entry.get_request_id();
                     let prep = PrepareWithDeadline {
                         entry,
-                        sent: self.clock.now_us(), // we do not really use sent_time
+                        time_us_sent_or_owd: None
                     };
                     self.late_buffer.insert(request_id, prep);
                     #[cfg(feature = "logging")]
