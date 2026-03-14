@@ -42,6 +42,36 @@ struct ReplyState {
     committed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Describes how a request was committed in Nezha/Sequence Paxos.
+///
+/// A request can be committed via the *fast path* (optimistic, fewer
+/// communication steps under good conditions) or the *slow path*
+/// (fallback when fast-path conditions are not met).
+enum CommitType {
+    Fast,
+    Slow,
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Status information for a client request's commit progress.
+///
+/// This struct tracks whether the request has been committed and
+/// fully processed, along with how it was committed and the number
+/// of replies observed on each path.
+struct ReqCommitStatus {
+    /// `true` if the request has reached a commit decision.
+    pub committed: bool,
+    /// `true` if processing of the request is fully completed.
+    pub completed: bool,
+    /// The type of commit (fast or slow), if a commit decision exists.
+    pub commit_type: Option<CommitType>,
+    /// Number of fast-path replies observed when deciding the commit, if tracked.
+    pub fast_replies_count: Option<usize>,
+    /// Number of slow-path replies observed when deciding the commit, if tracked.
+    pub slow_replies_count: Option<usize>,
+}
+
 impl ReplyState {
     fn replies(&self) -> &HashMap<NodeId, NezhaReply> {
         &self.replies
@@ -189,7 +219,7 @@ where
                     let s = config
                         .logger_file_path
                         .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str(), slog::Level::Trace)
+                    create_logger(s.as_str(), slog::Level::Debug)
                 }
             },
         };
@@ -569,17 +599,28 @@ where
         #[cfg(feature = "logging")]
         trace!(self.logger, "FastReply recorded"; "from" => from, "request_id" => ?request_id, "is_leader" => entry.leader_meta().is_some());
 
-        let (is_committed, _) = self.check_committed_and_completed(request_id);
+        let commit_status = self.check_committed_and_completed(request_id);
 
-        // Guaranteed that the request just got committed because otherwise we would have returned fast
-        if is_committed {
+        if commit_status.committed {
             #[cfg(feature = "logging")]
-            debug!(self.logger, "Request committed via fast path"; "request_id" => ?request_id);
+            debug!(self.logger, "Request committed after FastReply";
+                "request_id" => ?request_id,
+                "commit_type" => ?commit_status.commit_type.unwrap(),
+                "fast_replies_count" => commit_status.fast_replies_count.unwrap(),
+                "slow_replies_count" => commit_status.slow_replies_count.unwrap(),
+            );
 
             if let Some(state) = self.reply_set.get_mut(&request_id) {
                 state.mark_committed();
             }
-            self.nezha_stats.fast_path_commits += 1;
+            match commit_status.commit_type {
+                Some(CommitType::Fast) => self.nezha_stats.fast_path_commits += 1,
+                Some(CommitType::Slow) => self.nezha_stats.slow_path_commits += 1,
+                _ => {
+                    #[cfg(feature = "logging")]
+                    slog::error!(self.logger, "Commit type not set on committed status result, should never happen.");
+                }
+            }
 
             // find the log_idx for that request_id in reply_set and set it as the committed idx
             if let Some(commit_point) = self.reply_set.get(&request_id).and_then(|state| {
@@ -613,16 +654,29 @@ where
         trace!(self.logger, "SlowReply recorded"; "from" => from, "request_id" => ?request_id);
 
         let was_committed = entry.is_committed();
-        let (is_committed, should_remove) = self.check_committed_and_completed(request_id);
+        let commit_status = self.check_committed_and_completed(request_id);
 
         // Only enter if the request was just committed
-        if is_committed && !was_committed {
+        if commit_status.committed && !was_committed {
             #[cfg(feature = "logging")]
-            debug!(self.logger, "Request committed via slow path"; "request_id" => ?request_id);
+            debug!(self.logger, "Request committed after SlowReply";
+                "request_id" => ?request_id,
+                "commit_type" => ?commit_status.commit_type.unwrap(),
+                "fast_replies_count" => commit_status.fast_replies_count.unwrap(),
+                "slow_replies_count" => commit_status.slow_replies_count.unwrap(),
+            );
+
             if let Some(state) = self.reply_set.get_mut(&request_id) {
                 state.mark_committed();
             }
-            self.nezha_stats.slow_path_commits += 1;
+            match commit_status.commit_type {
+                Some(CommitType::Fast) => self.nezha_stats.fast_path_commits += 1,
+                Some(CommitType::Slow) => self.nezha_stats.slow_path_commits += 1,
+                _ => {
+                    #[cfg(feature = "logging")]
+                    slog::error!(self.logger, "Commit type not set on committed status result, should never happen.");
+                }
+            }
 
             // find the log_idx for that request_id in reply_set and set it as the committed idx
             if let Some(commit_point) = self.reply_set.get(&request_id).and_then(|state| {
@@ -631,7 +685,7 @@ where
                 self.set_committed_idx(commit_point);
             }
         }
-        if is_committed && should_remove {
+        if commit_status.committed && commit_status.completed {
             self.reply_set.remove(&request_id);
             #[cfg(feature = "logging")]
             trace!(self.logger, "Request removed from reply_set"; "request_id" => ?request_id);
@@ -640,38 +694,77 @@ where
         }
     }
 
-    // Request is committed when a super-quorum of fast replies is reached or a quorum of slow replies is reached
-    // Request is completed when it is committed and all the peers have sent their slow replies
-    //  This means that no more replies will be received so this request can be removed from the reply_set
-    fn check_committed_and_completed(&self, request_id: RequestId) -> (bool, bool) {
-        // Get replies mapping for this request id
+    /// Checks whether a request is committed and completed based on the replies
+    /// received from replicas.
+    ///
+    /// A request **commits via the fast path** if a *super quorum* of fast replies
+    /// matching the leader’s log hash is received:
+    ///
+    /// `fast_reply_num ≥ 1 + f + ⌊f/2⌋`
+    ///
+    /// A request **commits via the slow path** if the fast-path condition is not
+    /// satisfied but an *accept quorum* of slow replies is received:
+    ///
+    /// `slow_reply_num ≥ f`
+    ///
+    /// Slow replies count toward both slow and fast reply counts, since they imply
+    /// the replica's log matches the leader. Fast replies count only if their log
+    /// hash matches the leader’s.
+    ///
+    /// Returns [`ReqCommitStatus`] containing whether the request is committed,
+    /// whether it is completed (all replicas replied with slow replies), the commit
+    /// path, and the number of fast and slow replies observed.
+    fn check_committed_and_completed(&self, request_id: RequestId) -> ReqCommitStatus {
         let state = match self.reply_set.get(&request_id) {
             Some(state) => state,
-            None => return (false, false),
+            None => {
+                return ReqCommitStatus {
+                    committed: false,
+                    completed: false,
+                    commit_type: None,
+                    fast_replies_count: None,
+                    slow_replies_count: None,
+                }
+            }
         };
+
         let replies = state.replies();
 
-        // Get leader's reply if it exists (it is always a FastReply), otherwise return false as leader's reply is necessary to determine if request is committed
         let leader_pid = match state.leader_meta() {
             Some((pid, _commit_idx)) => pid,
-            None => return (false, false),
-        };
-        let leader_reply = match replies.get(&leader_pid) {
-            Some(NezhaReply::Fast(f)) => f,
-            _ => return (false, false),
+            None => {
+                return ReqCommitStatus {
+                    committed: false,
+                    completed: false,
+                    commit_type: None,
+                    fast_replies_count: None,
+                    slow_replies_count: None,
+                }
+            }
         };
 
-        // Count the number of fast and slow replies
+        let leader_reply = match replies.get(&leader_pid) {
+            Some(NezhaReply::Fast(f)) => f,
+            _ => {
+                return ReqCommitStatus {
+                    committed: false,
+                    completed: false,
+                    commit_type: None,
+                    fast_replies_count: None,
+                    slow_replies_count: None,
+                }
+            }
+        };
+
         let mut slow_reply_num = 0;
         let mut fast_reply_num = 0;
+
         for reply in replies.values() {
             match reply {
                 NezhaReply::Slow(_) => {
-                    // Slow reply counts as a fast reply since follower's log is guaranteed to be up to date with the leader
                     slow_reply_num += 1;
                     fast_reply_num += 1;
                 }
-                // Fast reply only counts if it has the same log hash as the leader
                 NezhaReply::Fast(f) if f.log_hash == leader_reply.log_hash => {
                     fast_reply_num += 1;
                 }
@@ -679,25 +772,33 @@ where
             }
         }
 
-        // Request is committed if it has either a super quorum of fast replies or an accept quorum of slow replies
-        let committed = self.leader_state.quorum.is_super_quorum(fast_reply_num)
-            || self.leader_state.quorum.is_accept_quorum(slow_reply_num);
+        let fast_quorum = self
+            .leader_state
+            .quorum
+            .is_super_quorum(fast_reply_num);
 
-        let completed: bool = committed && slow_reply_num == self.peers.len();
+        let slow_quorum = self
+            .leader_state
+            .quorum
+            .is_accept_quorum(slow_reply_num);
 
-        #[cfg(feature = "logging")]
-        if committed {
-            debug!(
-                self.logger,
-                "Request {:?} is committed with {} fast replies and {} slow replies. Completed: {:?}.",
-                request_id,
-                fast_reply_num,
-                slow_reply_num,
-                completed,
-            );
+        let (committed, commit_type) = if slow_quorum {
+            (true, Some(CommitType::Slow))
+        } else if fast_quorum {
+            (true, Some(CommitType::Fast))
+        } else {
+            (false, None)
+        };
+
+        let completed = committed && slow_reply_num == self.peers.len();
+
+        ReqCommitStatus {
+            committed,
+            completed,
+            commit_type,
+            fast_replies_count: Some(fast_reply_num),
+            slow_replies_count: Some(slow_reply_num),
         }
-
-        (committed, completed)
     }
 
     /// Propose a reconfiguration. Returns an error if already stopped or `new_config` is invalid.
@@ -749,7 +850,7 @@ where
 
     fn propose_entry(&mut self, mut entry: T) {
         // TODO: Currently using a constant 400 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
-        entry.set_deadline(self.clock.now_us_hi() + 400);
+        entry.set_deadline(self.clock.now_us_hi() + 4000);
         entry.set_request_id(RequestId::new_v4());
         entry.set_nezha_proxy_id(self.pid);
 
@@ -1799,7 +1900,10 @@ mod tests {
     fn check_committed_returns_false_for_unknown_request_id() {
         let paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
         let unknown_rid = Uuid::new_v4();
-        assert!(!paxos.check_committed_and_completed(unknown_rid).0);
+        let status = paxos.check_committed_and_completed(unknown_rid);
+        assert!(!status.committed);
+        assert!(!status.completed);
+        assert_eq!(status.commit_type, None);
     }
 
     #[test]
@@ -1874,7 +1978,10 @@ mod tests {
         paxos.reply_set.insert(rid, state);
 
         // 3 slow replies >= accept quorum of 3 → should be committed
-        assert!(paxos.check_committed_and_completed(rid).0);
+        let status = paxos.check_committed_and_completed(rid);
+        assert!(status.committed);
+        assert!(!status.completed);
+        assert_eq!(status.commit_type, Some(CommitType::Slow));
     }
 
     #[test]
@@ -1907,9 +2014,10 @@ mod tests {
                 }),
             );
 
-            let (committed, completed) = paxos.check_committed_and_completed(rid);
-            assert_eq!(committed, idx >= 2);
-            assert!(!completed);
+            let status = paxos.check_committed_and_completed(rid);
+            assert_eq!(status.committed, idx >= 2);
+            assert!(!status.completed);
+            assert_eq!(status.commit_type, if idx >= 2 { Some(CommitType::Slow) } else { None });
         }
 
         paxos.reply_set.get_mut(&rid).unwrap().insert_reply(
@@ -1920,8 +2028,9 @@ mod tests {
             }),
         );
 
-        let (committed, completed) = paxos.check_committed_and_completed(rid);
-        assert!(committed);
-        assert!(completed);
+        let status = paxos.check_committed_and_completed(rid);
+        assert!(status.committed);
+        assert!(status.completed);
+        assert_eq!(status.commit_type, Some(CommitType::Slow));
     }
 }

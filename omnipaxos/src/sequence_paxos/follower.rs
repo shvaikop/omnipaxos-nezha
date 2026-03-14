@@ -324,7 +324,7 @@ where
         if let Some(first_modification) = lm.modifications.first() {
             if first_modification.log_id != current_accepted_idx {
                 #[cfg(feature = "logging")]
-                warn!(
+                trace!(
                     self.logger,
                     "First log modification's log_id {} does not match accepted_idx {}",
                     first_modification.log_id,
