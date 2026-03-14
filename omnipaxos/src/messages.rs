@@ -336,67 +336,6 @@ pub mod sequence_paxos {
     }
 }
 
-/// Nezha protocol messages used by the NezhaProxy layer. These messages are seperate from
-/// SequencePaxos and BLE and are only used for the fast/slow coordniation
-pub mod nezha {
-    use crate::{storage::Entry, util::NodeId};
-    #[cfg(feature = "serde")]
-    use serde::{Deserialize, Serialize};
-
-    // Re-export types from parent module
-    pub use crate::messages::{RequestId, Timestamp};
-
-    /// Request sent by a client to the proxy to propose an entry for replication
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct ClientRequest<T>
-    where
-        T: Entry,
-    {
-        /// The id of the client request
-        pub request_id: RequestId,
-        /// The entry to be proposed for replication
-        pub entry: T,
-    }
-
-    /// Reply sent by the proxy back to the client after the request completes
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct ClientReply {
-        /// The id of the client request
-        pub request_id: RequestId,
-        /// Whether the request was applied successfully
-        pub ok: bool,
-    }
-
-    /// A struct for a Nezha message that also includes sender and receiver.
-    #[allow(missing_docs)]
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub enum NezhaMsg<T>
-    where
-        T: Entry,
-    {
-        ClientRequest(ClientRequest<T>),
-        ClientReply(ClientReply),
-    }
-
-    /// A struct for a Nezha message that also includes sender and receiver
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct NezhaMessage<T>
-    where
-        T: Entry,
-    {
-        /// Sender of `msg`.
-        pub from: NodeId,
-        /// Receiver of `msg`.
-        pub to: NodeId,
-        /// The message content.
-        pub msg: NezhaMsg<T>,
-    }
-}
-
 /// The different messages BLE uses to communicate with other servers.
 pub mod ballot_leader_election {
 
