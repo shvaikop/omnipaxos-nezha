@@ -755,7 +755,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: replacement.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 
@@ -819,7 +819,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: new_entry_1.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
         paxos.late_buffer.insert(
@@ -827,7 +827,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: new_entry_2.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
         paxos.late_buffer.insert(
@@ -835,7 +835,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: unrelated.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 

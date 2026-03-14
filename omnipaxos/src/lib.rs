@@ -44,6 +44,7 @@ pub mod utils;
 
 /// Clock simulation module.
 pub mod clock;
+mod owd_rolling_window;
 
 #[cfg(feature = "macros")]
 #[allow(unused_imports)]

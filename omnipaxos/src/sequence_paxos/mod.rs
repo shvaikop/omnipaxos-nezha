@@ -3,6 +3,7 @@ use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::L
 use crate::utils::logger::create_logger;
 use crate::{
     clock::Clock,
+    owd_rolling_window::OwdRollingWindow,
     messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
@@ -22,6 +23,7 @@ use std::{
     fmt::Debug,
     vec,
 };
+use std::collections::VecDeque;
 
 pub mod follower;
 pub mod leader;
@@ -140,6 +142,7 @@ where
     early_buffer: BinaryHeap<Reverse<PrepareWithDeadline<T>>>,
     reply_set: HashMap<RequestId, ReplyState>,
     committed_idx: usize,
+    dom_rolling_windows: HashMap<NodeId, OwdRollingWindow>,
     nezha_stats: NezhaStats,
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -210,6 +213,7 @@ where
             late_buffer: HashMap::new(),
             reply_set: HashMap::new(),
             committed_idx: 0,
+            dom_rolling_windows: HashMap::new(),
             nezha_stats: NezhaStats::default(),
             #[cfg(feature = "logging")]
             logger: {
@@ -227,6 +231,11 @@ where
             .internal_storage
             .set_promise(leader)
             .expect(WRITE_ERROR_MSG);
+
+        // Initialize rolling windows
+        for &peer_id in &paxos.peers {
+            paxos.dom_rolling_windows.insert(peer_id, OwdRollingWindow::default());
+        }
         #[cfg(feature = "logging")]
         {
             info!(paxos.logger, "Paxos component pid: {} created!", pid);
@@ -477,7 +486,7 @@ where
         }
     }
 
-    pub(crate) fn handle_prepare_with_deadline(&mut self, prep: PrepareWithDeadline<T>) {
+    pub(crate) fn handle_prepare_with_deadline(&mut self, mut prep: PrepareWithDeadline<T>) {
         // TODO:
         //   if Leader
         //     if Prepare: put in late buffer
@@ -485,6 +494,10 @@ where
         //  if Follower
         //    if Prepare: put in late buffer + forward to leader to put in late buffer (initate slow path)
         //    if Accept: put in early or late buffer
+        let time_now = self.clock.now_us_hi();
+        if prep.time_us_sent_or_owd.is_some() {
+            prep.time_us_sent_or_owd = Some(time_now.saturating_sub(prep.time_us_sent_or_owd.unwrap()));
+        }
         if prep.entry.get_deadline() > self.last_released_deadline {
             #[cfg(feature = "logging")]
             trace!(self.logger, "PrepareWithDeadline buffered in early_buffer"; "request_id" => ?prep.entry.get_request_id(), "deadline" => prep.entry.get_deadline());
@@ -539,6 +552,7 @@ where
                     } else {
                         None
                     },
+                    one_way_delay: prep.time_us_sent_or_owd
                 };
 
                 #[cfg(feature = "logging")]
@@ -579,6 +593,22 @@ where
             #[cfg(feature = "logging")]
             trace!(self.logger, "Ignoring FastReply"; "from" => from, "request_id" => ?freply.request_id, "ballot" => ?freply.n);
             return;
+        }
+
+        // Process the OWD sent back to us
+        if let Some(one_way_delay_us) = freply.one_way_delay {
+            #[cfg(feature = "logging")]
+            if !(1..=5_000).contains(&one_way_delay_us) {
+                warn!(self.logger, "Unusual one-way delay observed";
+                    "from" => from,
+                    "request_id" => ?freply.request_id,
+                    "one_way_delay_us" => one_way_delay_us,
+                );
+            }
+
+            if let Some(window) = self.dom_rolling_windows.get_mut(&from) {
+                window.push(one_way_delay_us);
+            }
         }
 
         let request_id = freply.request_id;
@@ -766,6 +796,8 @@ where
                     fast_reply_num += 1;
                 }
                 NezhaReply::Fast(f) if f.log_hash == leader_reply.log_hash => {
+                    #[cfg(feature = "logging")]
+                    debug!(self.logger, "FastReply hash did not match; request_id: {:?}", request_id);
                     fast_reply_num += 1;
                 }
                 _ => {}
@@ -849,8 +881,29 @@ where
     }
 
     fn propose_entry(&mut self, mut entry: T) {
-        // TODO: Currently using a constant 400 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
-        entry.set_deadline(self.clock.now_us_hi() + 4000);
+        const DEFAULT_OWD_US: u64 = 4000;
+
+        let percentile_values: Vec<u64> = self
+            .dom_rolling_windows
+            .values()
+            .filter_map(|w| w.percentile_value())
+            .collect();
+
+        let max_estimated_owd = percentile_values
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(DEFAULT_OWD_US);
+
+        #[cfg(feature = "logging")]
+        debug!(self.logger, "DOM rolling window percentile values";
+            "percentile_values" => ?percentile_values,
+            "max_estimated_owd_us" => max_estimated_owd,
+        );
+
+        let deadline = self.clock.now_us_hi() + max_estimated_owd + 300;
+
+        entry.set_deadline(deadline);
         entry.set_request_id(RequestId::new_v4());
         entry.set_nezha_proxy_id(self.pid);
 
@@ -864,7 +917,7 @@ where
                 let prep = PrepareWithDeadline {
                     from: self.pid,
                     entry: entry.clone(),
-                    sent: self.clock.now_us(),
+                    time_us_sent_or_owd: Some(self.clock.now_us()),
                 };
 
                 for peer_pid in &self.peers {
@@ -874,7 +927,9 @@ where
                         msg: PaxosMsg::PrepareWithDeadline(prep.clone()),
                     }));
                 }
-                self.handle_prepare_with_deadline(prep)
+                let mut prep_clone = prep.clone();
+                prep_clone.time_us_sent_or_owd = None;
+                self.handle_prepare_with_deadline(prep_clone);
             }
         }
     }
@@ -1155,7 +1210,7 @@ mod tests {
         let prep = PrepareWithDeadline {
             from: 2,
             entry,
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
 
         paxos.handle_prepare_with_deadline(prep);
@@ -1174,7 +1229,7 @@ mod tests {
         let prep = PrepareWithDeadline {
             from: 2,
             entry,
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
 
         paxos.handle_prepare_with_deadline(prep);
@@ -1194,7 +1249,7 @@ mod tests {
         let prep = PrepareWithDeadline {
             from: 2,
             entry,
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
 
         paxos.handle_prepare_with_deadline(prep);
@@ -1213,17 +1268,17 @@ mod tests {
         let prep1 = PrepareWithDeadline {
             from: 2,
             entry: TestEntry::new(1, rid1, 300),
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
         let prep2 = PrepareWithDeadline {
             from: 2,
             entry: TestEntry::new(2, rid2, 100),
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
         let prep3 = PrepareWithDeadline {
             from: 2,
             entry: TestEntry::new(3, rid3, 200),
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
 
         paxos.handle_prepare_with_deadline(prep1);
@@ -1242,7 +1297,7 @@ mod tests {
         let prep = PrepareWithDeadline {
             from: 2,
             entry: TestEntry::new(1, Uuid::new_v4(), 0),
-            sent: 0,
+            time_us_sent_or_owd: Some(0),
         };
         paxos.early_buffer.push(Reverse(prep));
 
@@ -1265,7 +1320,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: TestEntry::new(1, rid1, 5),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
         paxos.late_buffer.insert(
@@ -1273,7 +1328,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 3,
                 entry: TestEntry::new(2, rid2, 6),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 
@@ -1303,7 +1358,7 @@ mod tests {
             PrepareWithDeadline {
                 from: 2,
                 entry: TestEntry::new(1, rid, 5),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 
@@ -1327,6 +1382,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -1351,6 +1407,7 @@ mod tests {
             log_hash,
             is_leader: true, // leader reply
             log_idx: Some(1),
+            one_way_delay: None,
         };
 
         paxos.handle_fast_reply(freply, 3);
@@ -1374,6 +1431,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -1394,6 +1452,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
         let freply2 = FastReply {
             n: ballot,
@@ -1401,6 +1460,7 @@ mod tests {
             log_hash,
             is_leader: true, // different is_leader to check it's truly ignored
             log_idx: None,
+            one_way_delay: None,
         };
 
         paxos.handle_fast_reply(freply1, 2);
@@ -1430,6 +1490,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
 
         paxos.handle_fast_reply(freply, 2);
@@ -1516,6 +1577,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1594,6 +1656,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: Some(1),
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1633,6 +1696,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: Some(2),
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 2);
         // assert!(!paxos.committed.contains_key(&rid));
@@ -1674,6 +1738,7 @@ mod tests {
                 log_hash,
                 is_leader: true,
                 log_idx: Some(1),
+                one_way_delay: None,
             },
             2,
         );
@@ -1688,6 +1753,7 @@ mod tests {
                 log_hash,
                 is_leader: true,
                 log_idx: Some(2),
+                one_way_delay: None,
             },
             2,
         );
@@ -1749,6 +1815,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: Some(1),
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 1);
 
@@ -1758,6 +1825,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: Some(0),
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(follower_reply, 2);
 
@@ -1795,6 +1863,7 @@ mod tests {
                 log_hash,
                 is_leader: false,
                 log_idx: None,
+                one_way_delay: None,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1819,6 +1888,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1830,6 +1900,7 @@ mod tests {
                 log_hash,
                 is_leader: false,
                 log_idx: None,
+                one_way_delay: None,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1844,6 +1915,7 @@ mod tests {
             log_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(freply, 5);
 
@@ -1867,6 +1939,7 @@ mod tests {
             log_hash: leader_hash,
             is_leader: true,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(leader_reply, 2);
 
@@ -1878,6 +1951,7 @@ mod tests {
                 log_hash: leader_hash,
                 is_leader: false,
                 log_idx: None,
+                one_way_delay: None,
             };
             paxos.handle_fast_reply(freply, from);
         }
@@ -1889,6 +1963,7 @@ mod tests {
             log_hash: different_hash,
             is_leader: false,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(freply_mismatch, 5);
 
@@ -1920,6 +1995,7 @@ mod tests {
             log_hash,
             is_leader: true,
             log_idx: None,
+            one_way_delay: None,
         };
         paxos.handle_fast_reply(freply, 1);
 
@@ -1951,6 +2027,7 @@ mod tests {
                 log_hash,
                 is_leader: true,
                 log_idx: None,
+                one_way_delay: None,
             }),
         );
         state.insert_reply(
@@ -2000,6 +2077,7 @@ mod tests {
                 log_hash,
                 is_leader: true,
                 log_idx: Some(1),
+                one_way_delay: None,
             }),
         );
         state.set_leader_meta(Some((2, 1)));
