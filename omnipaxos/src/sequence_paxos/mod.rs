@@ -43,17 +43,32 @@ struct ReplyState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitType {
+/// Describes how a request was committed in Nezha/Sequence Paxos.
+///
+/// A request can be committed via the *fast path* (optimistic, fewer
+/// communication steps under good conditions) or the *slow path*
+/// (fallback when fast-path conditions are not met).
+enum CommitType {
     Fast,
     Slow,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ReqCommitStatus {
+/// Status information for a client request's commit progress.
+///
+/// This struct tracks whether the request has been committed and
+/// fully processed, along with how it was committed and the number
+/// of replies observed on each path.
+struct ReqCommitStatus {
+    /// `true` if the request has reached a commit decision.
     pub committed: bool,
+    /// `true` if processing of the request is fully completed.
     pub completed: bool,
+    /// The type of commit (fast or slow), if a commit decision exists.
     pub commit_type: Option<CommitType>,
+    /// Number of fast-path replies observed when deciding the commit, if tracked.
     pub fast_replies_count: Option<usize>,
+    /// Number of slow-path replies observed when deciding the commit, if tracked.
     pub slow_replies_count: Option<usize>,
 }
 
@@ -204,7 +219,7 @@ where
                     let s = config
                         .logger_file_path
                         .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str(), slog::Level::Trace)
+                    create_logger(s.as_str(), slog::Level::Debug)
                 }
             },
         };
@@ -644,7 +659,7 @@ where
         // Only enter if the request was just committed
         if commit_status.committed && !was_committed {
             #[cfg(feature = "logging")]
-            debug!(self.logger, "Request committed after FastReply";
+            debug!(self.logger, "Request committed after SlowReply";
                 "request_id" => ?request_id,
                 "commit_type" => ?commit_status.commit_type.unwrap(),
                 "fast_replies_count" => commit_status.fast_replies_count.unwrap(),
@@ -835,7 +850,7 @@ where
 
     fn propose_entry(&mut self, mut entry: T) {
         // TODO: Currently using a constant 400 microsecond addition to deadline. For bonus task, calculate max of OWDs values from receivers and augment with standard deviation (see paper)
-        entry.set_deadline(self.clock.now_us_hi() + 400);
+        entry.set_deadline(self.clock.now_us_hi() + 4000);
         entry.set_request_id(RequestId::new_v4());
         entry.set_nezha_proxy_id(self.pid);
 
