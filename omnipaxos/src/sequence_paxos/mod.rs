@@ -102,7 +102,10 @@ impl ReplyState {
                 true
             }
             Entry::Occupied(mut entry) => {
-                if matches!((entry.get(), &reply), (NezhaReply::Fast(_), NezhaReply::Slow(_))) {
+                if matches!(
+                    (entry.get(), &reply),
+                    (NezhaReply::Fast(_), NezhaReply::Slow(_))
+                ) {
                     entry.insert(reply);
                     true
                 } else {
@@ -550,13 +553,13 @@ where
 
                 // If this server was the original receiver of this entry, add its FastReply to reply_set since it will be the one keeping track
                 // of replies for this request
-                if prep.from == self.pid {
+                if prep.entry.get_nezha_proxy_id() == self.pid {
                     self.handle_fast_reply(freply, self.pid);
                 } else {
                     // Otherwise, add FastReply to outgoing buffer to be sent to original receiver of this entry
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                         from: self.pid,
-                        to: prep.from,
+                        to: prep.entry.get_nezha_proxy_id(),
                         msg: PaxosMsg::FastReply(freply),
                     }));
                 }
@@ -582,10 +585,7 @@ where
         }
 
         let request_id = freply.request_id;
-        let entry = self
-            .reply_set
-            .entry(request_id)
-            .or_default();
+        let entry = self.reply_set.entry(request_id).or_default();
         if freply.is_leader {
             // inserting both the leader's pid and the commit point that the leader sent in the FastReply
             let committed_idx = freply.log_idx.unwrap_or(0);
@@ -618,13 +618,18 @@ where
                 Some(CommitType::Slow) => self.nezha_stats.slow_path_commits += 1,
                 _ => {
                     #[cfg(feature = "logging")]
-                    slog::error!(self.logger, "Commit type not set on committed status result, should never happen.");
+                    slog::error!(
+                        self.logger,
+                        "Commit type not set on committed status result, should never happen."
+                    );
                 }
             }
 
             // find the log_idx for that request_id in reply_set and set it as the committed idx
             if let Some(commit_point) = self.reply_set.get(&request_id).and_then(|state| {
-                state.leader_meta().map(|(_leader_id, commit_point)| commit_point)
+                state
+                    .leader_meta()
+                    .map(|(_leader_id, commit_point)| commit_point)
             }) {
                 self.set_committed_idx(commit_point);
             }
@@ -632,18 +637,14 @@ where
     }
 
     pub(crate) fn handle_slow_reply(&mut self, sreply: SlowReply, from: NodeId) {
-        if self.state.1 != Phase::Accept
-        {
+        if self.state.1 != Phase::Accept {
             #[cfg(feature = "logging")]
             trace!(self.logger, "Ignoring SlowReply"; "from" => from, "request_id" => ?sreply.request_id, "ballot" => ?sreply.n);
             return;
         }
 
         let request_id = sreply.request_id;
-        let entry = self
-            .reply_set
-            .entry(request_id)
-            .or_default();
+        let entry = self.reply_set.entry(request_id).or_default();
 
         if !entry.insert_reply(from, NezhaReply::Slow(sreply)) {
             #[cfg(feature = "logging")]
@@ -674,13 +675,18 @@ where
                 Some(CommitType::Slow) => self.nezha_stats.slow_path_commits += 1,
                 _ => {
                     #[cfg(feature = "logging")]
-                    slog::error!(self.logger, "Commit type not set on committed status result, should never happen.");
+                    slog::error!(
+                        self.logger,
+                        "Commit type not set on committed status result, should never happen."
+                    );
                 }
             }
 
             // find the log_idx for that request_id in reply_set and set it as the committed idx
             if let Some(commit_point) = self.reply_set.get(&request_id).and_then(|state| {
-                state.leader_meta().map(|(_leader_id, commit_point)| commit_point)
+                state
+                    .leader_meta()
+                    .map(|(_leader_id, commit_point)| commit_point)
             }) {
                 self.set_committed_idx(commit_point);
             }
@@ -772,15 +778,9 @@ where
             }
         }
 
-        let fast_quorum = self
-            .leader_state
-            .quorum
-            .is_super_quorum(fast_reply_num);
+        let fast_quorum = self.leader_state.quorum.is_super_quorum(fast_reply_num);
 
-        let slow_quorum = self
-            .leader_state
-            .quorum
-            .is_accept_quorum(slow_reply_num);
+        let slow_quorum = self.leader_state.quorum.is_accept_quorum(slow_reply_num);
 
         let (committed, commit_type) = if slow_quorum {
             (true, Some(CommitType::Slow))
@@ -862,7 +862,6 @@ where
             // Otherwise, follow Nezha path- broadcast PrepareWithDeadline to all peers and process it locally
             _ => {
                 let prep = PrepareWithDeadline {
-                    from: self.pid,
                     entry: entry.clone(),
                     sent: self.clock.now_us(),
                 };
@@ -1152,11 +1151,7 @@ mod tests {
         let mut paxos = create_accept_paxos(1, false, vec![1, 2, 3]);
         let rid = Uuid::new_v4();
         let entry = TestEntry::new(42, rid, 100);
-        let prep = PrepareWithDeadline {
-            from: 2,
-            entry,
-            sent: 0,
-        };
+        let prep = PrepareWithDeadline { entry, sent: 0 };
 
         paxos.handle_prepare_with_deadline(prep);
 
@@ -1171,11 +1166,7 @@ mod tests {
 
         let rid = Uuid::new_v4();
         let entry = TestEntry::new(42, rid, 30); // deadline < last_released
-        let prep = PrepareWithDeadline {
-            from: 2,
-            entry,
-            sent: 0,
-        };
+        let prep = PrepareWithDeadline { entry, sent: 0 };
 
         paxos.handle_prepare_with_deadline(prep);
 
@@ -1191,11 +1182,7 @@ mod tests {
 
         let rid = Uuid::new_v4();
         let entry = TestEntry::new(42, rid, 50); // deadline == last_released
-        let prep = PrepareWithDeadline {
-            from: 2,
-            entry,
-            sent: 0,
-        };
+        let prep = PrepareWithDeadline { entry, sent: 0 };
 
         paxos.handle_prepare_with_deadline(prep);
 
@@ -1211,17 +1198,14 @@ mod tests {
         let rid2 = Uuid::new_v4();
         let rid3 = Uuid::new_v4();
         let prep1 = PrepareWithDeadline {
-            from: 2,
             entry: TestEntry::new(1, rid1, 300),
             sent: 0,
         };
         let prep2 = PrepareWithDeadline {
-            from: 2,
             entry: TestEntry::new(2, rid2, 100),
             sent: 0,
         };
         let prep3 = PrepareWithDeadline {
-            from: 2,
             entry: TestEntry::new(3, rid3, 200),
             sent: 0,
         };
@@ -1240,7 +1224,6 @@ mod tests {
     fn process_early_buffer_does_nothing_when_not_in_accept_phase() {
         let mut paxos = create_paxos(1, vec![1, 2, 3], Role::Follower, Phase::Prepare);
         let prep = PrepareWithDeadline {
-            from: 2,
             entry: TestEntry::new(1, Uuid::new_v4(), 0),
             sent: 0,
         };
@@ -1263,7 +1246,6 @@ mod tests {
         paxos.late_buffer.insert(
             rid1,
             PrepareWithDeadline {
-                from: 2,
                 entry: TestEntry::new(1, rid1, 5),
                 sent: 0,
             },
@@ -1271,7 +1253,6 @@ mod tests {
         paxos.late_buffer.insert(
             rid2,
             PrepareWithDeadline {
-                from: 3,
                 entry: TestEntry::new(2, rid2, 6),
                 sent: 0,
             },
@@ -1301,7 +1282,6 @@ mod tests {
         paxos.late_buffer.insert(
             rid,
             PrepareWithDeadline {
-                from: 2,
                 entry: TestEntry::new(1, rid, 5),
                 sent: 0,
             },
@@ -2017,7 +1997,14 @@ mod tests {
             let status = paxos.check_committed_and_completed(rid);
             assert_eq!(status.committed, idx >= 2);
             assert!(!status.completed);
-            assert_eq!(status.commit_type, if idx >= 2 { Some(CommitType::Slow) } else { None });
+            assert_eq!(
+                status.commit_type,
+                if idx >= 2 {
+                    Some(CommitType::Slow)
+                } else {
+                    None
+                }
+            );
         }
 
         paxos.reply_set.get_mut(&rid).unwrap().insert_reply(

@@ -407,7 +407,8 @@ where
                 .replace_entry(modification.log_id, modification.entry.clone())
                 .expect(WRITE_ERROR_MSG);
             // delete the new entry from late_buffer if it is there
-            self.late_buffer.remove(&modification.entry.get_request_id());
+            self.late_buffer
+                .remove(&modification.entry.get_request_id());
         }
     }
 
@@ -419,7 +420,8 @@ where
 
         // remove the entries that were added from the late buffer
         for modification in modifications {
-            self.late_buffer.remove(&modification.entry.get_request_id());
+            self.late_buffer
+                .remove(&modification.entry.get_request_id());
         }
     }
 
@@ -753,7 +755,6 @@ mod tests {
         paxos.late_buffer.insert(
             replacement.request_id,
             PrepareWithDeadline {
-                from: 2,
                 entry: replacement.clone(),
                 sent: 0,
             },
@@ -817,7 +818,6 @@ mod tests {
         paxos.late_buffer.insert(
             new_entry_1.request_id,
             PrepareWithDeadline {
-                from: 2,
                 entry: new_entry_1.clone(),
                 sent: 0,
             },
@@ -825,7 +825,6 @@ mod tests {
         paxos.late_buffer.insert(
             new_entry_2.request_id,
             PrepareWithDeadline {
-                from: 2,
                 entry: new_entry_2.clone(),
                 sent: 0,
             },
@@ -833,13 +832,15 @@ mod tests {
         paxos.late_buffer.insert(
             unrelated.request_id,
             PrepareWithDeadline {
-                from: 2,
                 entry: unrelated.clone(),
                 sent: 0,
             },
         );
 
-        let modifications = build_modifications(0, vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()]);
+        let modifications = build_modifications(
+            0,
+            vec![existing.clone(), new_entry_1.clone(), new_entry_2.clone()],
+        );
 
         paxos.handle_log_modifications(modifications);
 

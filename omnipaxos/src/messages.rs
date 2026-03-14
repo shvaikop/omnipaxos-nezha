@@ -168,8 +168,6 @@ pub mod sequence_paxos {
     where
         T: Entry,
     {
-        /// The node that originally received this entry from the client
-        pub from: NodeId,
         /// The entry to be proposed for replication
         pub entry: T,
         /// The timestamp when the message is sent

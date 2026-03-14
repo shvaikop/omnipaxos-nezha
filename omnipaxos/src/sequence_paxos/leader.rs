@@ -151,7 +151,6 @@ where
                 for entry in entries {
                     let request_id = entry.get_request_id();
                     let prep = PrepareWithDeadline {
-                        from: entry.get_nezha_proxy_id(),
                         entry,
                         sent: self.clock.now_us(), // we do not really use sent_time
                     };
