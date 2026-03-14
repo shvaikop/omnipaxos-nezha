@@ -361,9 +361,14 @@ where
 
         // update the accepted index to the end of the modifications, which is the new sync point for the leader
         if let Some(end) = lm.modifications.last() {
+            let new_accepted_idx = end.log_id + 1;
             self.internal_storage
-                .set_accepted_idx(end.log_id + 1)
+                .set_accepted_idx(new_accepted_idx)
                 .expect(WRITE_ERROR_MSG);
+
+            if new_accepted_idx > current_accepted_idx {
+                self.send_log_status();
+            }
 
             for i in current_accepted_idx..=end.log_id {
                 self.send_slow_reply(i);
