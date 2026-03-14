@@ -153,7 +153,7 @@ where
                     let prep = PrepareWithDeadline {
                         from: entry.get_nezha_proxy_id(),
                         entry,
-                        sent: self.clock.now_us(), // we do not really use sent_time
+                        time_us_sent_or_owd: None
                     };
                     self.late_buffer.insert(request_id, prep);
                     #[cfg(feature = "logging")]
