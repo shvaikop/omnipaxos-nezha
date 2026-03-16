@@ -756,7 +756,7 @@ mod tests {
             replacement.request_id,
             PrepareWithDeadline {
                 entry: replacement.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 
@@ -819,21 +819,21 @@ mod tests {
             new_entry_1.request_id,
             PrepareWithDeadline {
                 entry: new_entry_1.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
         paxos.late_buffer.insert(
             new_entry_2.request_id,
             PrepareWithDeadline {
                 entry: new_entry_2.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
         paxos.late_buffer.insert(
             unrelated.request_id,
             PrepareWithDeadline {
                 entry: unrelated.clone(),
-                sent: 0,
+                time_us_sent_or_owd: Some(0),
             },
         );
 
